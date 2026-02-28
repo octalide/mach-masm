@@ -1,7 +1,7 @@
 # masm.function: IR function and block records
 #
 # provides the Function and Block types for the compact IR, along with
-# creation, block management, and destruction. a Function owns its
+# creation, block management, and teardown. a Function owns its
 # blocks and per-function pools (constants, labels, metadata).
 
 use std.types.bool;
@@ -12,8 +12,9 @@ use std.types.result;
 use allocator: std.allocator;
 use dbg:       std.print;
 
-use inst:  masm.inst;
-use pool:  masm.pool;
+use inst:     masm.inst;
+use pool:     masm.pool;
+use typedesc: masm.typedesc;
 
 # DebugLoc: source location for one instruction
 #
@@ -75,7 +76,7 @@ pub rec Function {
     const_pool:  pool.ConstPool;
     labels:      pool.LabelTable;
     data_pool:   pool.DataPool;
-    type_descs:  pool.TypeDescTable;
+    type_descs:  typedesc.TypeDescTable;
 }
 
 pub val FUNC_VARIADIC: u16 = 1;
@@ -172,11 +173,11 @@ pub fun block_set_debug(block: *Block, idx: i32, line: i32, file: u16) {
     block.debug_locs[idx].src_file = file;
 }
 
-# block_destroy: free all memory owned by a block
+# block_free: free all memory owned by a block
 # ---
 # alloc: allocator used during creation/append
 # block: pointer to block
-pub fun block_destroy(alloc: *allocator.Allocator, block: *Block) {
+pub fun block_free(alloc: *allocator.Allocator, block: *Block) {
     if (alloc == nil || block == nil) { ret; }
     if (block.insts != nil) {
         allocator.allocator_free[inst.Instruction](alloc, block.insts, block.inst_cap::usize);
@@ -213,10 +214,10 @@ pub fun create_function(alloc: *allocator.Allocator, name: str) Result[*Function
     f.block_cap = 0;
     f.param_count = 0;
     f.flags = 0;
-    f.const_pool = pool.const_pool_init(alloc);
-    f.labels = pool.label_table_init(alloc);
-    f.data_pool = pool.data_pool_init(alloc);
-    f.type_descs = pool.typedesc_table_init();
+    f.const_pool = pool.const_init(alloc);
+    f.labels = pool.label_init(alloc);
+    f.data_pool = pool.data_init(alloc);
+    f.type_descs = typedesc.init();
 
     ret ok[*Function, str](f);
 }
@@ -259,17 +260,17 @@ pub fun func_add_block(alloc: *allocator.Allocator, func: *Function, block: *Blo
     ret idx;
 }
 
-# func_destroy: free all memory owned by a function, including blocks and pools
+# func_free: free all memory owned by a function, including blocks and pools
 # ---
 # alloc: allocator used during creation
 # func:  pointer to function
-pub fun func_destroy(alloc: *allocator.Allocator, func: *Function) {
+pub fun func_free(alloc: *allocator.Allocator, func: *Function) {
     if (alloc == nil || func == nil) { ret; }
 
     var bi: i32 = 0;
     for (bi < func.block_count) {
         if (func.blocks[bi] != nil) {
-            block_destroy(alloc, func.blocks[bi]);
+            block_free(alloc, func.blocks[bi]);
         }
         bi = bi + 1;
     }
@@ -278,10 +279,10 @@ pub fun func_destroy(alloc: *allocator.Allocator, func: *Function) {
         func.blocks = nil;
     }
 
-    pool.const_pool_destroy(alloc, ?func.const_pool);
-    pool.label_table_destroy(alloc, ?func.labels);
-    pool.data_pool_destroy(alloc, ?func.data_pool);
-    pool.typedesc_table_destroy(alloc, ?func.type_descs);
+    pool.const_dnit(alloc, ?func.const_pool);
+    pool.label_dnit(alloc, ?func.labels);
+    pool.data_dnit(alloc, ?func.data_pool);
+    typedesc.dnit(alloc, ?func.type_descs);
 
     func.block_count = 0;
     func.block_cap = 0;

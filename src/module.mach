@@ -192,19 +192,19 @@ pub fun build(b: *ModuleBuilder) Module {
     ret m;
 }
 
-# module_destroy: free all memory owned by a module
+# module_dnit: free all memory owned by a module
 #
-# destroys all functions, data declarations, and the debug file array.
+# frees all functions, data declarations, and the debug file array.
 # ---
 # alloc: allocator used during construction
 # m:     pointer to module
-pub fun module_destroy(alloc: *allocator.Allocator, m: *Module) {
+pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
     if (alloc == nil || m == nil) { ret; }
 
     var i: i32 = 0;
     for (i < m.func_count) {
         if (m.functions[i] != nil) {
-            fn.func_destroy(alloc, m.functions[i]);
+            fn.func_free(alloc, m.functions[i]);
         }
         i = i + 1;
     }
@@ -214,7 +214,7 @@ pub fun module_destroy(alloc: *allocator.Allocator, m: *Module) {
     }
     m.func_count = 0;
 
-    data.list_destroy(alloc, ?m.data_decls);
+    data.list_dnit(alloc, ?m.data_decls);
 
     if (m.debug_files != nil) {
         allocator.allocator_free[str](alloc, m.debug_files, m.debug_file_count::usize);

@@ -1,0 +1,207 @@
+# masm.typedesc: type descriptors for ABI classification
+#
+# carries enough type information for any calling convention to classify
+# arguments and return values correctly. OP_ARG, OP_PARAM, and OP_RETVAL
+# instructions reference entries in the TypeDescTable by u16 index through
+# their f2 field. this gives any ABI lowering pass the type information it
+# needs without encoding ABI-specific metadata into the instruction format.
+
+use std.types.size;
+use std.types.result;
+
+use allocator: std.allocator;
+
+pub def TypeDescKind: u8;
+
+pub val TYPEDESC_INT:   TypeDescKind = 0;
+pub val TYPEDESC_FLOAT: TypeDescKind = 1;
+pub val TYPEDESC_PTR:   TypeDescKind = 2;
+pub val TYPEDESC_AGG:   TypeDescKind = 3;
+
+# one field within an aggregate type descriptor
+#
+# describes a single scalar field at a byte offset within a composite
+# type. ABI classification passes inspect these to determine per-field
+# register class (GP vs FP) for argument and return value placement.
+# ---
+# offset: byte offset within the aggregate
+# kind:   field kind (TYPEDESC_INT, TYPEDESC_FLOAT, TYPEDESC_PTR)
+# size:   field size in bytes
+pub rec TypeDescField {
+    offset: u16;
+    kind:   u8;
+    size:   u8;
+}
+
+# type descriptor for ABI classification
+#
+# scalars have field_count=0 and fields=nil. aggregates enumerate their
+# fields so ABI passes can assign individual fields to the correct
+# register class.
+# ---
+# kind:        type kind (int, float, ptr, aggregate)
+# total_size:  total byte size of the type
+# align:       alignment requirement in bytes
+# field_count: number of fields (0 for scalars)
+# fields:      pointer to field array (nil for scalars)
+pub rec TypeDesc {
+    kind:        u8;
+    total_size:  u16;
+    align:       u8;
+    field_count: u8;
+    fields:      *TypeDescField;
+}
+
+# per-function growable array of type descriptors
+# ---
+# descs: backing array of type descriptors
+# count: number of entries
+# cap:   allocated capacity
+pub rec TypeDescTable {
+    descs: *TypeDesc;
+    count: i32;
+    cap:   i32;
+}
+
+val INITIAL_CAP: i32 = 8;
+
+# init: create an empty type descriptor table
+# ---
+# ret: zero-initialized table
+pub fun init() TypeDescTable {
+    var t: TypeDescTable;
+    t.descs = nil;
+    t.count = 0;
+    t.cap = 0;
+    ret t;
+}
+
+# intern: append a type descriptor to the table
+#
+# grows the backing array geometrically when full.
+# ---
+# alloc: allocator for array growth
+# tbl:   pointer to table
+# desc:  type descriptor to append
+# ret:   table index (>= 0), or -1 on failure
+pub fun intern(alloc: *allocator.Allocator, tbl: *TypeDescTable, desc: TypeDesc) i32 {
+    if (alloc == nil || tbl == nil) { ret -1; }
+
+    if (tbl.count >= tbl.cap) {
+        var new_cap: i32 = INITIAL_CAP;
+        if (tbl.cap > 0) { new_cap = tbl.cap * 2; }
+        val r: Result[*TypeDesc, allocator.AllocError] =
+            allocator.allocator_resize[TypeDesc](alloc, tbl.descs,
+                tbl.cap::usize, new_cap::usize);
+        if (result_is_err[*TypeDesc, allocator.AllocError](r)) { ret -1; }
+        tbl.descs = result_unwrap_ok[*TypeDesc, allocator.AllocError](r);
+        tbl.cap = new_cap;
+    }
+
+    val idx: i32 = tbl.count;
+    tbl.descs[idx] = desc;
+    tbl.count = tbl.count + 1;
+    ret idx;
+}
+
+# get: retrieve a type descriptor by index
+# ---
+# tbl: pointer to table
+# idx: table index
+# ret: pointer to type descriptor, or nil if out of bounds
+pub fun get(tbl: *TypeDescTable, idx: i32) *TypeDesc {
+    if (tbl == nil || idx < 0 || idx >= tbl.count) { ret nil; }
+    ret ?tbl.descs[idx];
+}
+
+# dnit: free all memory owned by a type descriptor table
+#
+# frees per-descriptor field arrays, then the backing array itself.
+# ---
+# alloc: allocator used during construction
+# tbl:   pointer to table
+pub fun dnit(alloc: *allocator.Allocator, tbl: *TypeDescTable) {
+    if (alloc == nil || tbl == nil) { ret; }
+
+    var i: i32 = 0;
+    for (i < tbl.count) {
+        if (tbl.descs[i].fields != nil) {
+            allocator.allocator_free[TypeDescField](alloc, tbl.descs[i].fields,
+                tbl.descs[i].field_count::usize);
+        }
+        i = i + 1;
+    }
+
+    if (tbl.descs != nil) {
+        allocator.allocator_free[TypeDesc](alloc, tbl.descs, tbl.cap::usize);
+        tbl.descs = nil;
+    }
+    tbl.count = 0;
+    tbl.cap = 0;
+}
+
+# make_int: create a scalar integer type descriptor
+# ---
+# size:  byte size (1, 2, 4, or 8)
+# align: alignment in bytes
+# ret:   initialized type descriptor
+pub fun make_int(size: u16, align: u8) TypeDesc {
+    var d: TypeDesc;
+    d.kind = TYPEDESC_INT;
+    d.total_size = size;
+    d.align = align;
+    d.field_count = 0;
+    d.fields = nil;
+    ret d;
+}
+
+# make_float: create a scalar floating-point type descriptor
+# ---
+# size:  byte size (4 or 8)
+# align: alignment in bytes
+# ret:   initialized type descriptor
+pub fun make_float(size: u16, align: u8) TypeDesc {
+    var d: TypeDesc;
+    d.kind = TYPEDESC_FLOAT;
+    d.total_size = size;
+    d.align = align;
+    d.field_count = 0;
+    d.fields = nil;
+    ret d;
+}
+
+# make_ptr: create a pointer type descriptor
+# ---
+# ptr_size: pointer width in bytes (4 or 8)
+# ret:      initialized type descriptor
+pub fun make_ptr(ptr_size: u8) TypeDesc {
+    var d: TypeDesc;
+    d.kind = TYPEDESC_PTR;
+    d.total_size = ptr_size::u16;
+    d.align = ptr_size;
+    d.field_count = 0;
+    d.fields = nil;
+    ret d;
+}
+
+# make_agg: create an aggregate type descriptor
+#
+# the fields pointer is stored directly. the caller must allocate the
+# field array with the same allocator used for the TypeDescTable so
+# that dnit can free it.
+# ---
+# total_size:  total byte size of the aggregate
+# align:       alignment in bytes
+# fields:      pointer to field array
+# field_count: number of fields
+# ret:         initialized type descriptor
+pub fun make_agg(total_size: u16, align: u8,
+                  fields: *TypeDescField, field_count: u8) TypeDesc {
+    var d: TypeDesc;
+    d.kind = TYPEDESC_AGG;
+    d.total_size = total_size;
+    d.align = align;
+    d.field_count = field_count;
+    d.fields = fields;
+    ret d;
+}

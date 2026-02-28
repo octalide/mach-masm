@@ -160,11 +160,11 @@ pub fun is_function(sym: *Symbol) bool {
     ret sym.sym_type == SYM_FUNC;
 }
 
-# destroy: free a symbol
+# free: free a symbol
 # ---
 # alloc: allocator used during create
 # s:     pointer to symbol
-pub fun destroy(alloc: *allocator.Allocator, s: *Symbol) {
+pub fun free(alloc: *allocator.Allocator, s: *Symbol) {
     if (alloc == nil || s == nil) { ret; }
     allocator.allocator_free[Symbol](alloc, s, 1);
 }

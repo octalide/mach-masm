@@ -1,10 +1,9 @@
-# masm.pool: per-function data pools and type descriptors
+# masm.pool: per-function data pools
 #
 # provides ConstPool (64-bit program constants), DataPool (width-agnostic
-# byte pool for instruction metadata), LabelTable (label name interning),
-# and TypeDescTable (type descriptors for ABI classification). all pools
-# use index-based lookup. instruction fields reference pool entries by
-# u16 index. pools own their backing memory and grow geometrically.
+# byte pool for instruction metadata), and LabelTable (label name interning).
+# all pools use index-based lookup. instruction fields reference pool entries
+# by u16 index. pools own their backing memory and grow geometrically.
 
 use std.types.bool;
 use std.types.size;
@@ -34,11 +33,11 @@ pub rec ConstPool {
 
 val CONST_POOL_INITIAL_CAP: i32 = 8;
 
-# const_pool_init: create an empty constant pool
+# const_init: create an empty constant pool
 # ---
 # alloc: allocator for the dedup map
 # ret:   initialized empty pool
-pub fun const_pool_init(alloc: *allocator.Allocator) ConstPool {
+pub fun const_init(alloc: *allocator.Allocator) ConstPool {
     var p: ConstPool;
     p.values = nil;
     p.count = 0;
@@ -98,11 +97,11 @@ pub fun const_get(pool: *ConstPool, idx: i32) u64 {
     ret pool.values[idx];
 }
 
-# const_pool_destroy: free all memory owned by a constant pool
+# const_dnit: free all memory owned by a constant pool
 # ---
 # alloc: allocator used during init/intern
 # pool:  pointer to pool
-pub fun const_pool_destroy(alloc: *allocator.Allocator, pool: *ConstPool) {
+pub fun const_dnit(alloc: *allocator.Allocator, pool: *ConstPool) {
     if (alloc == nil || pool == nil) { ret; }
     map.map_dnit[u64, i32](?pool.dedup);
     if (pool.values != nil) {
@@ -131,11 +130,11 @@ pub rec LabelTable {
 
 val LABEL_TABLE_INITIAL_CAP: i32 = 16;
 
-# label_table_init: create an empty label table
+# label_init: create an empty label table
 # ---
 # alloc: allocator for the dedup map
 # ret:   initialized empty table
-pub fun label_table_init(alloc: *allocator.Allocator) LabelTable {
+pub fun label_init(alloc: *allocator.Allocator) LabelTable {
     var t: LabelTable;
     t.names = nil;
     t.count = 0;
@@ -194,11 +193,11 @@ pub fun label_get(tbl: *LabelTable, idx: i32) str {
     ret tbl.names[idx];
 }
 
-# label_table_destroy: free all memory owned by a label table
+# label_dnit: free all memory owned by a label table
 # ---
 # alloc: allocator used during init/intern
 # tbl:   pointer to table
-pub fun label_table_destroy(alloc: *allocator.Allocator, tbl: *LabelTable) {
+pub fun label_dnit(alloc: *allocator.Allocator, tbl: *LabelTable) {
     if (alloc == nil || tbl == nil) { ret; }
     map.map_dnit[str, i32](?tbl.dedup);
     if (tbl.names != nil) {
@@ -238,11 +237,11 @@ pub rec DataPool {
 val DATA_POOL_INITIAL_CAP:      i32 = 16;
 val DATA_POOL_INITIAL_DATA_CAP: i32 = 128;
 
-# data_pool_init: create an empty data pool
+# data_init: create an empty data pool
 # ---
 # alloc: allocator for the dedup map
 # ret:   initialized empty pool
-pub fun data_pool_init(alloc: *allocator.Allocator) DataPool {
+pub fun data_init(alloc: *allocator.Allocator) DataPool {
     var p: DataPool;
     p.data = nil;
     p.offsets = nil;
@@ -405,11 +404,11 @@ pub fun data_get_i32(pool: *DataPool, idx: i32) i32 {
     ret @(ptr::*i32);
 }
 
-# data_pool_destroy: free all memory owned by a data pool
+# data_dnit: free all memory owned by a data pool
 # ---
 # alloc: allocator used during init/intern
 # pool:  pointer to pool
-pub fun data_pool_destroy(alloc: *allocator.Allocator, pool: *DataPool) {
+pub fun data_dnit(alloc: *allocator.Allocator, pool: *DataPool) {
     if (alloc == nil || pool == nil) { ret; }
     map.map_dnit[u64, i32](?pool.dedup);
     if (pool.data != nil) {
@@ -428,205 +427,4 @@ pub fun data_pool_destroy(alloc: *allocator.Allocator, pool: *DataPool) {
     pool.cap = 0;
     pool.data_len = 0;
     pool.data_cap = 0;
-}
-
-pub def TypeDescKind: u8;
-
-pub val TYPEDESC_INT:   TypeDescKind = 0;
-pub val TYPEDESC_FLOAT: TypeDescKind = 1;
-pub val TYPEDESC_PTR:   TypeDescKind = 2;
-pub val TYPEDESC_AGG:   TypeDescKind = 3;
-
-# TypeDescField: one field within an aggregate type descriptor
-#
-# describes a single scalar field at a byte offset within a composite
-# type. ABI classification passes inspect these to determine per-field
-# register class (GP vs FP) for argument and return value placement.
-# ---
-# offset: byte offset within the aggregate
-# kind:   field kind (TYPEDESC_INT, TYPEDESC_FLOAT, TYPEDESC_PTR)
-# size:   field size in bytes
-pub rec TypeDescField {
-    offset: u16;
-    kind:   u8;
-    size:   u8;
-}
-
-# TypeDesc: type descriptor for ABI classification
-#
-# carries enough type information for any calling convention to classify
-# arguments and return values correctly. scalars have field_count=0 and
-# fields=nil. aggregates enumerate their fields so ABI passes can assign
-# individual fields to the correct register class.
-# ---
-# kind:        type kind (int, float, ptr, aggregate)
-# total_size:  total byte size of the type
-# align:       alignment requirement in bytes
-# field_count: number of fields (0 for scalars)
-# fields:      pointer to field array (nil for scalars)
-pub rec TypeDesc {
-    kind:        u8;
-    total_size:  u16;
-    align:       u8;
-    field_count: u8;
-    fields:      *TypeDescField;
-}
-
-# TypeDescTable: per-function growable array of type descriptors
-#
-# OP_ARG, OP_PARAM, and OP_RETVAL instructions reference entries in
-# this table by u16 index through their f2 field. this gives any ABI
-# lowering pass the type information it needs without encoding
-# ABI-specific metadata into the instruction format.
-# ---
-# descs: backing array of type descriptors
-# count: number of entries
-# cap:   allocated capacity
-pub rec TypeDescTable {
-    descs: *TypeDesc;
-    count: i32;
-    cap:   i32;
-}
-
-val TYPEDESC_TABLE_INITIAL_CAP: i32 = 8;
-
-# typedesc_table_init: create an empty type descriptor table
-# ---
-# ret: zero-initialized table
-pub fun typedesc_table_init() TypeDescTable {
-    var t: TypeDescTable;
-    t.descs = nil;
-    t.count = 0;
-    t.cap = 0;
-    ret t;
-}
-
-# typedesc_intern: append a type descriptor to the table
-#
-# grows the backing array geometrically when full.
-# ---
-# alloc: allocator for array growth
-# tbl:   pointer to table
-# desc:  type descriptor to append
-# ret:   table index (>= 0), or -1 on failure
-pub fun typedesc_intern(alloc: *allocator.Allocator, tbl: *TypeDescTable, desc: TypeDesc) i32 {
-    if (alloc == nil || tbl == nil) { ret -1; }
-
-    if (tbl.count >= tbl.cap) {
-        var new_cap: i32 = TYPEDESC_TABLE_INITIAL_CAP;
-        if (tbl.cap > 0) { new_cap = tbl.cap * 2; }
-        val r: Result[*TypeDesc, allocator.AllocError] =
-            allocator.allocator_resize[TypeDesc](alloc, tbl.descs,
-                tbl.cap::usize, new_cap::usize);
-        if (result_is_err[*TypeDesc, allocator.AllocError](r)) { ret -1; }
-        tbl.descs = result_unwrap_ok[*TypeDesc, allocator.AllocError](r);
-        tbl.cap = new_cap;
-    }
-
-    val idx: i32 = tbl.count;
-    tbl.descs[idx] = desc;
-    tbl.count = tbl.count + 1;
-    ret idx;
-}
-
-# typedesc_get: retrieve a type descriptor by index
-# ---
-# tbl: pointer to table
-# idx: table index
-# ret: pointer to type descriptor, or nil if out of bounds
-pub fun typedesc_get(tbl: *TypeDescTable, idx: i32) *TypeDesc {
-    if (tbl == nil || idx < 0 || idx >= tbl.count) { ret nil; }
-    ret ?tbl.descs[idx];
-}
-
-# typedesc_table_destroy: free all memory owned by a type descriptor table
-#
-# frees per-descriptor field arrays, then the backing array itself.
-# ---
-# alloc: allocator used during construction
-# tbl:   pointer to table
-pub fun typedesc_table_destroy(alloc: *allocator.Allocator, tbl: *TypeDescTable) {
-    if (alloc == nil || tbl == nil) { ret; }
-
-    var i: i32 = 0;
-    for (i < tbl.count) {
-        if (tbl.descs[i].fields != nil) {
-            allocator.allocator_free[TypeDescField](alloc, tbl.descs[i].fields,
-                tbl.descs[i].field_count::usize);
-        }
-        i = i + 1;
-    }
-
-    if (tbl.descs != nil) {
-        allocator.allocator_free[TypeDesc](alloc, tbl.descs, tbl.cap::usize);
-        tbl.descs = nil;
-    }
-    tbl.count = 0;
-    tbl.cap = 0;
-}
-
-# make_typedesc_int: create a scalar integer type descriptor
-# ---
-# size:  byte size (1, 2, 4, or 8)
-# align: alignment in bytes
-# ret:   initialized type descriptor
-pub fun make_typedesc_int(size: u16, align: u8) TypeDesc {
-    var d: TypeDesc;
-    d.kind = TYPEDESC_INT;
-    d.total_size = size;
-    d.align = align;
-    d.field_count = 0;
-    d.fields = nil;
-    ret d;
-}
-
-# make_typedesc_float: create a scalar floating-point type descriptor
-# ---
-# size:  byte size (4 or 8)
-# align: alignment in bytes
-# ret:   initialized type descriptor
-pub fun make_typedesc_float(size: u16, align: u8) TypeDesc {
-    var d: TypeDesc;
-    d.kind = TYPEDESC_FLOAT;
-    d.total_size = size;
-    d.align = align;
-    d.field_count = 0;
-    d.fields = nil;
-    ret d;
-}
-
-# make_typedesc_ptr: create a pointer type descriptor
-# ---
-# ptr_size: pointer width in bytes (4 or 8)
-# ret:      initialized type descriptor
-pub fun make_typedesc_ptr(ptr_size: u8) TypeDesc {
-    var d: TypeDesc;
-    d.kind = TYPEDESC_PTR;
-    d.total_size = ptr_size::u16;
-    d.align = ptr_size;
-    d.field_count = 0;
-    d.fields = nil;
-    ret d;
-}
-
-# make_typedesc_agg: create an aggregate type descriptor
-#
-# the fields pointer is stored directly. the caller must allocate the
-# field array with the same allocator used for the TypeDescTable so
-# that typedesc_table_destroy can free it.
-# ---
-# total_size:  total byte size of the aggregate
-# align:       alignment in bytes
-# fields:      pointer to field array
-# field_count: number of fields
-# ret:         initialized type descriptor
-pub fun make_typedesc_agg(total_size: u16, align: u8,
-                          fields: *TypeDescField, field_count: u8) TypeDesc {
-    var d: TypeDesc;
-    d.kind = TYPEDESC_AGG;
-    d.total_size = total_size;
-    d.align = align;
-    d.field_count = field_count;
-    d.fields = fields;
-    ret d;
 }
