@@ -1,0 +1,232 @@
+# masm.op: opcode vocabulary
+#
+# defines the set of operations, condition codes, memory orderings,
+# and atomic RMW kinds that comprise the MASM instruction set. this is
+# the "language" of MASM — purely declarative constants and their
+# human-readable name functions.
+
+use std.types.bool;
+
+pub def Operator: u8;
+pub def Cond:     u8;
+
+# data movement
+pub val OP_MOV:     Operator = 0;
+pub val OP_LOAD:    Operator = 1;
+pub val OP_STORE:   Operator = 2;
+pub val OP_ADDR:    Operator = 3;
+
+# integer arithmetic
+pub val OP_ADD:     Operator = 4;
+pub val OP_SUB:     Operator = 5;
+pub val OP_MUL:     Operator = 6;
+pub val OP_DIV:     Operator = 7;
+pub val OP_MOD:     Operator = 8;
+pub val OP_DIVU:    Operator = 9;
+pub val OP_MODU:    Operator = 10;
+
+# bitwise
+pub val OP_AND:     Operator = 11;
+pub val OP_OR:      Operator = 12;
+pub val OP_XOR:     Operator = 13;
+pub val OP_SHL:     Operator = 14;
+pub val OP_SHR:     Operator = 15;
+pub val OP_SAR:     Operator = 16;
+
+# comparison (value-producing, not flag-setting)
+pub val OP_ICMP:    Operator = 17;
+pub val OP_FCMP:    Operator = 18;
+
+# control flow
+pub val OP_JMP:     Operator = 19;
+pub val OP_BRCOND:  Operator = 20;
+pub val OP_CALL:    Operator = 21;
+pub val OP_RET:     Operator = 22;
+
+# conversions
+pub val OP_ZEXT:    Operator = 23;
+pub val OP_SEXT:    Operator = 24;
+pub val OP_TRUNC:   Operator = 25;
+pub val OP_ITOF:    Operator = 26;
+pub val OP_FTOI:    Operator = 27;
+pub val OP_FEXT:    Operator = 28;
+pub val OP_FTRUNC:  Operator = 29;
+
+# float arithmetic
+pub val OP_FADD:    Operator = 30;
+pub val OP_FSUB:    Operator = 31;
+pub val OP_FMUL:    Operator = 32;
+pub val OP_FDIV:    Operator = 33;
+
+# pseudo-instructions
+pub val OP_LABEL:   Operator = 34;
+pub val OP_SYSCALL: Operator = 35;
+
+# calling and parameter passing
+#
+# OP_ARG, OP_PARAM, and OP_RETVAL carry type descriptor indices in f2
+# so any ABI lowering pass can classify arguments and return values
+# into registers, stack slots, or hidden pointers without the format
+# encoding any ABI-specific metadata.
+#
+# OP_CALL:    direct:   f0=result_reg, f1=0, f2=[label] label_idx (flag=0)
+#             indirect: f0=result_reg, f1=target_reg, f2=0 (flag=1)
+#             meta.cc bit 0 = tail call
+# OP_ARG:     f0=arg_idx, f1=value_reg, f2=type_desc_idx
+# OP_PARAM:   f0=param_idx, f1=byte_size, f2=type_desc_idx
+# OP_RETVAL:  f0=value_reg, f1=0, f2=type_desc_idx
+# OP_SCARG:   f0=arg_idx, f1=value_reg, f2=0
+pub val OP_ARG:     Operator = 36;
+pub val OP_PARAM:   Operator = 37;
+pub val OP_RETVAL:  Operator = 38;
+pub val OP_SCARG:   Operator = 39;
+
+# internal (peephole/ISel only, never emitted by lowering)
+pub val OP_NOP:     Operator = 40;
+pub val OP_MEMSET:  Operator = 41;
+
+# atomics
+#
+# the cc field carries memory ordering instead of a condition code.
+# ordering values: relaxed=0, acquire=1, release=2, acq_rel=3, seq_cst=4.
+#
+# OP_ATOMIC_LOAD:  f0=dst, f1=base, f2=[pool] disp
+# OP_ATOMIC_STORE: f0=src, f1=base, f2=[pool] disp
+# OP_CMPXCHG:      f0=result, f1=base, f2=[pool] packed{expected:u16,new:u16,disp:i32}
+# OP_FENCE:        no operands
+# OP_ATOMIC_RMW:   f0=result, f1=base, f2=[pool] packed{operand:u16,rmw_op:u8,pad:u8,disp:i32}
+pub val OP_ATOMIC_LOAD:  Operator = 42;
+pub val OP_ATOMIC_STORE: Operator = 43;
+pub val OP_CMPXCHG:      Operator = 44;
+pub val OP_FENCE:        Operator = 45;
+pub val OP_ATOMIC_RMW:   Operator = 46;
+
+pub val OP_COUNT: u8 = 47;
+
+pub val CC_NONE: Cond = 0;
+pub val CC_EQ:   Cond = 1;
+pub val CC_NE:   Cond = 2;
+pub val CC_LT:   Cond = 3;
+pub val CC_LE:   Cond = 4;
+pub val CC_GT:   Cond = 5;
+pub val CC_GE:   Cond = 6;
+pub val CC_ULT:  Cond = 7;
+pub val CC_ULE:  Cond = 8;
+pub val CC_UGT:  Cond = 9;
+pub val CC_UGE:  Cond = 10;
+
+pub val MO_RELAXED: u8 = 0;
+pub val MO_ACQUIRE: u8 = 1;
+pub val MO_RELEASE: u8 = 2;
+pub val MO_ACQ_REL: u8 = 3;
+pub val MO_SEQ_CST: u8 = 4;
+
+pub val RMW_ADD:  u8 = 0;
+pub val RMW_SUB:  u8 = 1;
+pub val RMW_AND:  u8 = 2;
+pub val RMW_OR:   u8 = 3;
+pub val RMW_XOR:  u8 = 4;
+pub val RMW_XCHG: u8 = 5;
+
+pub val CALL_TAIL: u8 = 1;
+
+# op_name: human-readable name for an opcode
+# ---
+# op:  opcode
+# ret: name string, or "unknown" for invalid opcodes
+pub fun op_name(op: Operator) str {
+    if (op == OP_MOV)          { ret "mov"; }
+    if (op == OP_LOAD)         { ret "load"; }
+    if (op == OP_STORE)        { ret "store"; }
+    if (op == OP_ADDR)         { ret "addr"; }
+    if (op == OP_ADD)          { ret "add"; }
+    if (op == OP_SUB)          { ret "sub"; }
+    if (op == OP_MUL)          { ret "mul"; }
+    if (op == OP_DIV)          { ret "div"; }
+    if (op == OP_MOD)          { ret "mod"; }
+    if (op == OP_DIVU)         { ret "divu"; }
+    if (op == OP_MODU)         { ret "modu"; }
+    if (op == OP_AND)          { ret "and"; }
+    if (op == OP_OR)           { ret "or"; }
+    if (op == OP_XOR)          { ret "xor"; }
+    if (op == OP_SHL)          { ret "shl"; }
+    if (op == OP_SHR)          { ret "shr"; }
+    if (op == OP_SAR)          { ret "sar"; }
+    if (op == OP_ICMP)         { ret "icmp"; }
+    if (op == OP_FCMP)         { ret "fcmp"; }
+    if (op == OP_JMP)          { ret "jmp"; }
+    if (op == OP_BRCOND)       { ret "brcond"; }
+    if (op == OP_CALL)         { ret "call"; }
+    if (op == OP_RET)          { ret "ret"; }
+    if (op == OP_ZEXT)         { ret "zext"; }
+    if (op == OP_SEXT)         { ret "sext"; }
+    if (op == OP_TRUNC)        { ret "trunc"; }
+    if (op == OP_ITOF)         { ret "itof"; }
+    if (op == OP_FTOI)         { ret "ftoi"; }
+    if (op == OP_FEXT)         { ret "fext"; }
+    if (op == OP_FTRUNC)       { ret "ftrunc"; }
+    if (op == OP_FADD)         { ret "fadd"; }
+    if (op == OP_FSUB)         { ret "fsub"; }
+    if (op == OP_FMUL)         { ret "fmul"; }
+    if (op == OP_FDIV)         { ret "fdiv"; }
+    if (op == OP_LABEL)        { ret "label"; }
+    if (op == OP_SYSCALL)      { ret "syscall"; }
+    if (op == OP_ARG)          { ret "arg"; }
+    if (op == OP_PARAM)        { ret "param"; }
+    if (op == OP_RETVAL)       { ret "retval"; }
+    if (op == OP_SCARG)        { ret "scarg"; }
+    if (op == OP_NOP)          { ret "nop"; }
+    if (op == OP_MEMSET)       { ret "memset"; }
+    if (op == OP_ATOMIC_LOAD)  { ret "atomic_load"; }
+    if (op == OP_ATOMIC_STORE) { ret "atomic_store"; }
+    if (op == OP_CMPXCHG)      { ret "cmpxchg"; }
+    if (op == OP_FENCE)        { ret "fence"; }
+    if (op == OP_ATOMIC_RMW)   { ret "atomic_rmw"; }
+    ret "unknown";
+}
+
+# cc_name: human-readable name for a condition code
+# ---
+# cc:  condition code
+# ret: name string, or "" for CC_NONE, or "unknown" for invalid codes
+pub fun cc_name(cc: Cond) str {
+    if (cc == CC_NONE) { ret ""; }
+    if (cc == CC_EQ)   { ret "eq"; }
+    if (cc == CC_NE)   { ret "ne"; }
+    if (cc == CC_LT)   { ret "lt"; }
+    if (cc == CC_LE)   { ret "le"; }
+    if (cc == CC_GT)   { ret "gt"; }
+    if (cc == CC_GE)   { ret "ge"; }
+    if (cc == CC_ULT)  { ret "ult"; }
+    if (cc == CC_ULE)  { ret "ule"; }
+    if (cc == CC_UGT)  { ret "ugt"; }
+    if (cc == CC_UGE)  { ret "uge"; }
+    ret "unknown";
+}
+
+# mo_name: human-readable name for a memory ordering
+# ---
+# mo:  memory ordering value
+# ret: name string, or "unknown" for invalid values
+pub fun mo_name(mo: u8) str {
+    if (mo == MO_RELAXED) { ret "relaxed"; }
+    if (mo == MO_ACQUIRE) { ret "acquire"; }
+    if (mo == MO_RELEASE) { ret "release"; }
+    if (mo == MO_ACQ_REL) { ret "acq_rel"; }
+    if (mo == MO_SEQ_CST) { ret "seq_cst"; }
+    ret "unknown";
+}
+
+# rmw_name: human-readable name for an atomic RMW operation
+# ---
+# op:  RMW operation value
+# ret: name string, or "unknown" for invalid values
+pub fun rmw_name(op: u8) str {
+    if (op == RMW_ADD)  { ret "add"; }
+    if (op == RMW_SUB)  { ret "sub"; }
+    if (op == RMW_AND)  { ret "and"; }
+    if (op == RMW_OR)   { ret "or"; }
+    if (op == RMW_XOR)  { ret "xor"; }
+    if (op == RMW_XCHG) { ret "xchg"; }
+    ret "unknown";
+}
