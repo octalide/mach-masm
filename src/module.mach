@@ -12,32 +12,25 @@ use std.types.result;
 use std.types.string;
 
 use allocator: std.allocator;
+use vec:       std.collections.vector;
 use fn:        masm.function;
 use data:      masm.data;
 
 # Module: immutable representation of a compiled program's IR
 # ---
-# functions:        array of function pointers
-# func_count:       number of functions
-# func_cap:         allocated function capacity
-# data_decls:       module-level data declarations
-# debug_files:      source file path table for debug info
-# debug_file_count: number of debug file entries
-# debug_file_cap:   allocated debug file capacity
-# target_arch:      target architecture name
-# target_os:        target operating system name
-# ptr_size:         pointer width in bytes
+# functions:   vector of function pointers
+# data_decls:  module-level data declarations
+# debug_files: source file path table for debug info
+# target_arch: target architecture name
+# target_os:   target operating system name
+# ptr_size:    pointer width in bytes
 pub rec Module {
-    functions:        **fn.Function;
-    func_count:       i32;
-    func_cap:         i32;
-    data_decls:       data.DataDeclList;
-    debug_files:      *str;
-    debug_file_count: i32;
-    debug_file_cap:   i32;
-    target_arch:      str;
-    target_os:        str;
-    ptr_size:         u8;
+    functions:   vec.Vector[*fn.Function];
+    data_decls:  data.DataDeclList;
+    debug_files: vec.Vector[str];
+    target_arch: str;
+    target_os:   str;
+    ptr_size:    u8;
 }
 
 # ModuleBuilder: mutable construction API for building a Module
@@ -46,33 +39,22 @@ pub rec Module {
 # freeze into an immutable Module. the builder transfers ownership
 # and must not be used after build().
 # ---
-# alloc:            allocator for all internal arrays
-# functions:        function pointer array
-# func_count:       number of functions
-# func_cap:         allocated function capacity
-# data_decls:       data declaration list
-# debug_files:      debug file path array
-# debug_file_count: number of debug file entries
-# debug_file_cap:   allocated debug file capacity
-# target_arch:      target architecture name
-# target_os:        target operating system name
-# ptr_size:         pointer width in bytes
+# alloc:       allocator for all internal arrays
+# functions:   function pointer vector
+# data_decls:  data declaration list
+# debug_files: debug file path vector
+# target_arch: target architecture name
+# target_os:   target operating system name
+# ptr_size:    pointer width in bytes
 pub rec ModuleBuilder {
-    alloc:            *allocator.Allocator;
-    functions:        **fn.Function;
-    func_count:       i32;
-    func_cap:         i32;
-    data_decls:       data.DataDeclList;
-    debug_files:      *str;
-    debug_file_count: i32;
-    debug_file_cap:   i32;
-    target_arch:      str;
-    target_os:        str;
-    ptr_size:         u8;
+    alloc:       *allocator.Allocator;
+    functions:   vec.Vector[*fn.Function];
+    data_decls:  data.DataDeclList;
+    debug_files: vec.Vector[str];
+    target_arch: str;
+    target_os:   str;
+    ptr_size:    u8;
 }
-
-val INITIAL_FUNC_CAP:       i32 = 32;
-val INITIAL_DEBUG_FILE_CAP: i32 = 8;
 
 # builder_init: create a new empty module builder
 # ---
@@ -81,13 +63,9 @@ val INITIAL_DEBUG_FILE_CAP: i32 = 8;
 pub fun builder_init(alloc: *allocator.Allocator) ModuleBuilder {
     var b: ModuleBuilder;
     b.alloc = alloc;
-    b.functions = nil;
-    b.func_count = 0;
-    b.func_cap = 0;
-    b.data_decls = data.list_init();
-    b.debug_files = nil;
-    b.debug_file_count = 0;
-    b.debug_file_cap = 0;
+    b.functions = vec.init[*fn.Function](alloc);
+    b.data_decls = data.list_init(alloc);
+    b.debug_files = vec.init[str](alloc);
     b.target_arch = nil;
     b.target_os = nil;
     b.ptr_size = 0;
@@ -95,8 +73,6 @@ pub fun builder_init(alloc: *allocator.Allocator) ModuleBuilder {
 }
 
 # builder_add_function: register an IR function with the module
-#
-# grows the function array geometrically when full.
 # ---
 # b:    pointer to builder
 # func: pointer to function to register
@@ -104,22 +80,10 @@ pub fun builder_init(alloc: *allocator.Allocator) ModuleBuilder {
 pub fun builder_add_function(b: *ModuleBuilder, func: *fn.Function) Result[bool, str] {
     if (b == nil || func == nil) { ret err[bool, str]("nil argument"); }
 
-    if (b.func_count >= b.func_cap) {
-        var new_cap: i32 = INITIAL_FUNC_CAP;
-        if (b.func_cap > 0) { new_cap = b.func_cap * 2; }
-
-        val r: Result[**fn.Function, allocator.AllocError] =
-            allocator.allocator_resize[*fn.Function](b.alloc, b.functions,
-                b.func_cap::usize, new_cap::usize);
-        if (result_is_err[**fn.Function, allocator.AllocError](r)) {
-            ret err[bool, str]("out of memory");
-        }
-        b.functions = result_unwrap_ok[**fn.Function, allocator.AllocError](r);
-        b.func_cap = new_cap;
+    val r: Result[usize, str] = vec.vector_push[*fn.Function](?b.functions, func);
+    if (result_is_err[usize, str](r)) {
+        ret err[bool, str]("out of memory");
     }
-
-    b.functions[b.func_count] = func;
-    b.func_count = b.func_count + 1;
     ret ok[bool, str](true);
 }
 
@@ -130,7 +94,7 @@ pub fun builder_add_function(b: *ModuleBuilder, func: *fn.Function) Result[bool,
 # ret:  index of the added declaration, or -1 on failure
 pub fun builder_add_data(b: *ModuleBuilder, decl: data.DataDecl) i32 {
     if (b == nil) { ret -1; }
-    ret data.list_add(b.alloc, ?b.data_decls, decl);
+    ret data.list_add(?b.data_decls, decl);
 }
 
 # builder_add_debug_file: register a source file path for debug info
@@ -142,35 +106,24 @@ pub fun builder_add_data(b: *ModuleBuilder, decl: data.DataDecl) i32 {
 # path: source file path
 # ret:  1-based file index, or 0 on error
 pub fun builder_add_debug_file(b: *ModuleBuilder, path: str) u16 {
-    if (b == nil || path == nil || b.alloc == nil) { ret 0; }
+    if (b == nil || path == nil) { ret 0; }
 
-    var i: i32 = 0;
-    for (i < b.debug_file_count) {
-        if (b.debug_files[i] != nil && str_equals(b.debug_files[i], path)) {
+    var i: usize = 0;
+    for (i < b.debug_files.len) {
+        if (b.debug_files.data[i] != nil && str_equals(b.debug_files.data[i], path)) {
             ret (i + 1)::u16;
         }
         i = i + 1;
     }
 
-    if (b.debug_file_count >= b.debug_file_cap) {
-        var new_cap: i32 = INITIAL_DEBUG_FILE_CAP;
-        if (b.debug_file_cap > 0) { new_cap = b.debug_file_cap * 2; }
-        val r: Result[*str, allocator.AllocError] = allocator.allocator_resize[str](
-            b.alloc, b.debug_files, b.debug_file_cap::usize, new_cap::usize);
-        if (result_is_err[*str, allocator.AllocError](r)) { ret 0; }
-        b.debug_files = result_unwrap_ok[*str, allocator.AllocError](r);
-        b.debug_file_cap = new_cap;
-    }
-
-    val idx: i32 = b.debug_file_count;
-    b.debug_files[idx] = path;
-    b.debug_file_count = b.debug_file_count + 1;
-    ret (idx + 1)::u16;
+    val r: Result[usize, str] = vec.vector_push[str](?b.debug_files, path);
+    if (result_is_err[usize, str](r)) { ret 0; }
+    ret (result_unwrap_ok[usize, str](r))::u16;
 }
 
 # build: freeze the builder into an immutable Module
 #
-# transfers ownership of all internal arrays to the returned Module.
+# transfers ownership of all internal vectors to the returned Module.
 # the builder is invalidated and must not be used afterward.
 # ---
 # b:   pointer to builder
@@ -178,56 +131,39 @@ pub fun builder_add_debug_file(b: *ModuleBuilder, path: str) u16 {
 pub fun build(b: *ModuleBuilder) Module {
     var m: Module;
     m.functions = b.functions;
-    m.func_count = b.func_count;
-    m.func_cap = b.func_cap;
     m.data_decls = b.data_decls;
     m.debug_files = b.debug_files;
-    m.debug_file_count = b.debug_file_count;
-    m.debug_file_cap = b.debug_file_cap;
     m.target_arch = b.target_arch;
     m.target_os = b.target_os;
     m.ptr_size = b.ptr_size;
 
-    b.functions = nil;
-    b.func_count = 0;
-    b.func_cap = 0;
-    b.data_decls = data.list_init();
-    b.debug_files = nil;
-    b.debug_file_count = 0;
-    b.debug_file_cap = 0;
+    b.functions = vec.init[*fn.Function](b.alloc);
+    b.data_decls = data.list_init(b.alloc);
+    b.debug_files = vec.init[str](b.alloc);
 
     ret m;
 }
 
 # module_dnit: free all memory owned by a module
 #
-# frees all functions, data declarations, and the debug file array.
+# frees all functions, data declarations, and the debug file vector.
 # ---
 # alloc: allocator used during construction
 # m:     pointer to module
 pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
     if (alloc == nil || m == nil) { ret; }
 
-    var i: i32 = 0;
-    for (i < m.func_count) {
-        if (m.functions[i] != nil) {
-            fn.func_dnit(alloc, m.functions[i]);
-            allocator.allocator_free[fn.Function](alloc, m.functions[i], 1);
+    var i: usize = 0;
+    for (i < m.functions.len) {
+        if (m.functions.data[i] != nil) {
+            fn.func_dnit(alloc, m.functions.data[i]);
+            allocator.allocator_free[fn.Function](alloc, m.functions.data[i], 1);
         }
         i = i + 1;
     }
-    if (m.functions != nil) {
-        allocator.allocator_free[*fn.Function](alloc, m.functions, m.func_cap::usize);
-        m.functions = nil;
-    }
-    m.func_count = 0;
+    vec.vector_dnit[*fn.Function](?m.functions);
 
     data.list_dnit(alloc, ?m.data_decls);
 
-    if (m.debug_files != nil) {
-        allocator.allocator_free[str](alloc, m.debug_files, m.debug_file_cap::usize);
-        m.debug_files = nil;
-    }
-    m.debug_file_count = 0;
+    vec.vector_dnit[str](?m.debug_files);
 }
-

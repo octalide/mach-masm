@@ -10,6 +10,7 @@ use std.types.string;
 use std.types.result;
 
 use allocator: std.allocator;
+use vec:       std.collections.vector;
 
 use inst:     masm.inst;
 use pool:     masm.pool;
@@ -56,9 +57,7 @@ pub rec Block {
 # the backend, not stored in the format.
 # ---
 # name:        function name (symbol name)
-# blocks:      array of block pointers
-# block_count: number of blocks
-# block_cap:   allocated block capacity
+# blocks:      vector of block pointers
 # param_count: number of parameters
 # flags:       function-level flags (FUNC_VARIADIC, FUNC_NORETURN)
 # const_pool:  per-function 64-bit constant pool
@@ -67,9 +66,7 @@ pub rec Block {
 # type_descs:  per-function type descriptor table for ABI classification
 pub rec Function {
     name:        str;
-    blocks:      **Block;
-    block_count: i32;
-    block_cap:   i32;
+    blocks:      vec.Vector[*Block];
     param_count: i32;
     flags:       u16;
     const_pool:  pool.ConstPool;
@@ -179,64 +176,43 @@ pub fun block_dnit(alloc: *allocator.Allocator, block: *Block) {
 
 # func_init: create an empty function with initialized pools
 # ---
-# alloc: allocator for pool initialization
+# alloc: allocator for pool and vector initialization
 # name:  function name (symbol name)
 # ret:   initialized function
 pub fun func_init(alloc: *allocator.Allocator, name: str) Function {
     var f: Function;
     f.name = name;
-    f.blocks = nil;
-    f.block_count = 0;
-    f.block_cap = 0;
+    f.blocks = vec.init[*Block](alloc);
     f.param_count = 0;
     f.flags = 0;
     f.const_pool = pool.const_init(alloc);
     f.labels = pool.label_init(alloc);
     f.data_pool = pool.data_init(alloc);
-    f.type_descs = typedesc.init();
+    f.type_descs = typedesc.init(alloc);
     ret f;
 }
 
 # func_add_block: append a block to a function
-#
-# grows the block pointer array geometrically when full.
 # ---
-# alloc: allocator for array growth
 # func:  pointer to function
 # block: pointer to block to append
 # ret:   index of the appended block, or -1 on failure
-pub fun func_add_block(alloc: *allocator.Allocator, func: *Function, block: *Block) i32 {
-    if (func == nil || block == nil || alloc == nil) {
+pub fun func_add_block(func: *Function, block: *Block) i32 {
+    if (func == nil || block == nil) {
         ret -1;
     }
 
-    if (func.block_count >= func.block_cap) {
-        var new_cap: i32 = 8;
-        if (func.block_cap > 0) {
-            new_cap = func.block_cap * 2;
-        }
-
-        val r: Result[**Block, allocator.AllocError] = allocator.allocator_resize[*Block](
-            alloc, func.blocks, func.block_cap::usize, new_cap::usize
-        );
-        if (result_is_err[**Block, allocator.AllocError](r)) {
-            ret -1;
-        }
-
-        func.blocks = result_unwrap_ok[**Block, allocator.AllocError](r);
-        func.block_cap = new_cap;
+    val r: Result[usize, str] = vec.vector_push[*Block](?func.blocks, block);
+    if (result_is_err[usize, str](r)) {
+        ret -1;
     }
 
-    val idx: i32 = func.block_count;
-    func.blocks[idx] = block;
-    func.block_count = func.block_count + 1;
-
-    ret idx;
+    ret (result_unwrap_ok[usize, str](r) - 1)::i32;
 }
 
 # func_dnit: free all internal memory owned by a function
 #
-# frees all blocks (their internals and pointers), the block array,
+# frees all blocks (their internals and pointers), the block vector,
 # and all per-function pools. does not free the function pointer itself.
 # ---
 # alloc: allocator used during construction
@@ -244,24 +220,18 @@ pub fun func_add_block(alloc: *allocator.Allocator, func: *Function, block: *Blo
 pub fun func_dnit(alloc: *allocator.Allocator, func: *Function) {
     if (alloc == nil || func == nil) { ret; }
 
-    var bi: i32 = 0;
-    for (bi < func.block_count) {
-        if (func.blocks[bi] != nil) {
-            block_dnit(alloc, func.blocks[bi]);
-            allocator.allocator_free[Block](alloc, func.blocks[bi], 1);
+    var bi: usize = 0;
+    for (bi < func.blocks.len) {
+        if (func.blocks.data[bi] != nil) {
+            block_dnit(alloc, func.blocks.data[bi]);
+            allocator.allocator_free[Block](alloc, func.blocks.data[bi], 1);
         }
         bi = bi + 1;
     }
-    if (func.blocks != nil) {
-        allocator.allocator_free[*Block](alloc, func.blocks, func.block_cap::usize);
-        func.blocks = nil;
-    }
+    vec.vector_dnit[*Block](?func.blocks);
 
     pool.const_dnit(alloc, ?func.const_pool);
     pool.label_dnit(alloc, ?func.labels);
     pool.data_dnit(alloc, ?func.data_pool);
     typedesc.dnit(alloc, ?func.type_descs);
-
-    func.block_count = 0;
-    func.block_cap = 0;
 }

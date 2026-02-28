@@ -10,6 +10,7 @@ use std.types.size;
 use std.types.result;
 
 use allocator: std.allocator;
+use vec:       std.collections.vector;
 use sym:       masm.symbol;
 
 pub def DataKind: u8;
@@ -69,58 +70,35 @@ pub rec DataDecl {
     src_line:    i32;
 }
 
-val INITIAL_DECL_CAP:  i32 = 32;
 val INITIAL_RELOC_CAP: i32 = 4;
 
 # DataDeclList: growable array of data declarations
 # ---
-# decls: backing array
-# count: number of declarations
-# cap:   allocated capacity
+# decls: backing vector
 pub rec DataDeclList {
-    decls: *DataDecl;
-    count: i32;
-    cap:   i32;
+    decls: vec.Vector[DataDecl];
 }
 
 # list_init: create an empty data declaration list
 # ---
-# ret: zero-initialized list
-pub fun list_init() DataDeclList {
+# alloc: allocator for vector storage
+# ret:   empty list
+pub fun list_init(alloc: *allocator.Allocator) DataDeclList {
     var l: DataDeclList;
-    l.decls = nil;
-    l.count = 0;
-    l.cap = 0;
+    l.decls = vec.init[DataDecl](alloc);
     ret l;
 }
 
 # list_add: append a declaration to the list
-#
-# grows the backing array geometrically when full.
 # ---
-# alloc: allocator for array growth
-# l:     pointer to list
-# decl:  declaration to append
-# ret:   index of the appended declaration, or -1 on failure
-pub fun list_add(alloc: *allocator.Allocator, l: *DataDeclList, decl: DataDecl) i32 {
-    if (alloc == nil || l == nil) { ret -1; }
-
-    if (l.count >= l.cap) {
-        var new_cap: i32 = INITIAL_DECL_CAP;
-        if (l.cap > 0) { new_cap = l.cap * 2; }
-
-        val r: Result[*DataDecl, allocator.AllocError] =
-            allocator.allocator_resize[DataDecl](alloc, l.decls, l.cap::usize, new_cap::usize);
-        if (result_is_err[*DataDecl, allocator.AllocError](r)) { ret -1; }
-
-        l.decls = result_unwrap_ok[*DataDecl, allocator.AllocError](r);
-        l.cap = new_cap;
-    }
-
-    val idx: i32 = l.count;
-    l.decls[idx] = decl;
-    l.count = l.count + 1;
-    ret idx;
+# l:    pointer to list
+# decl: declaration to append
+# ret:  index of the appended declaration, or -1 on failure
+pub fun list_add(l: *DataDeclList, decl: DataDecl) i32 {
+    if (l == nil) { ret -1; }
+    val r: Result[usize, str] = vec.vector_push[DataDecl](?l.decls, decl);
+    if (result_is_err[usize, str](r)) { ret -1; }
+    ret (result_unwrap_ok[usize, str](r) - 1)::i32;
 }
 
 # list_get: retrieve a declaration by index
@@ -129,38 +107,34 @@ pub fun list_add(alloc: *allocator.Allocator, l: *DataDeclList, decl: DataDecl) 
 # index: declaration index
 # ret:   pointer to the declaration, or nil if out of bounds
 pub fun list_get(l: *DataDeclList, index: i32) *DataDecl {
-    if (l == nil || l.decls == nil) { ret nil; }
-    if (index < 0 || index >= l.count) { ret nil; }
-    ret ?l.decls[index];
+    if (l == nil || index < 0) { ret nil; }
+    val r: Result[*DataDecl, str] = vec.vector_get[DataDecl](?l.decls, index::usize);
+    if (result_is_err[*DataDecl, str](r)) { ret nil; }
+    ret result_unwrap_ok[*DataDecl, str](r);
 }
 
 # list_dnit: free a list and all owned memory
 #
 # frees per-declaration relocation arrays and data buffers, then the
-# backing array itself.
+# backing vector.
 # ---
-# alloc: allocator used during construction
+# alloc: allocator used for per-declaration allocations
 # l:     pointer to list
 pub fun list_dnit(alloc: *allocator.Allocator, l: *DataDeclList) {
     if (alloc == nil || l == nil) { ret; }
 
-    var i: i32 = 0;
-    for (i < l.count) {
-        if (l.decls[i].relocs != nil) {
-            allocator.allocator_free[DeclReloc](alloc, l.decls[i].relocs, l.decls[i].reloc_cap::usize);
+    var i: usize = 0;
+    for (i < l.decls.len) {
+        if (l.decls.data[i].relocs != nil) {
+            allocator.allocator_free[DeclReloc](alloc, l.decls.data[i].relocs, l.decls.data[i].reloc_cap::usize);
         }
-        if (l.decls[i].data != nil) {
-            allocator.allocator_free[u8](alloc, l.decls[i].data, l.decls[i].data_len::usize);
+        if (l.decls.data[i].data != nil) {
+            allocator.allocator_free[u8](alloc, l.decls.data[i].data, l.decls.data[i].data_len::usize);
         }
         i = i + 1;
     }
 
-    if (l.decls != nil) {
-        allocator.allocator_free[DataDecl](alloc, l.decls, l.cap::usize);
-    }
-    l.decls = nil;
-    l.count = 0;
-    l.cap = 0;
+    vec.vector_dnit[DataDecl](?l.decls);
 }
 
 # make_bytes: create a DATA_BYTES declaration
