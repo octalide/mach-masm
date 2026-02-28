@@ -186,7 +186,7 @@ pub fun make_cmp(o: u8, dst: u16, src1: u16, src2: u16, cc: u8, size: u8) Instru
 # make_unary: register-to-register unary operation (f0=dst, f1=src)
 #
 # covers OP_MOV (reg-reg copy), OP_ZEXT, OP_SEXT, OP_TRUNC, OP_ITOF,
-# OP_FEXT, and OP_FTRUNC. for OP_FTOI use mk_ftoi instead (it carries
+# OP_FEXT, and OP_FTRUNC. for OP_FTOI use make_ftoi instead (it carries
 # the source float size in f2).
 # ---
 # o:    opcode

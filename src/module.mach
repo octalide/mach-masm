@@ -18,18 +18,22 @@ use data:      masm.data;
 # ---
 # functions:        array of function pointers
 # func_count:       number of functions
+# func_cap:         allocated function capacity
 # data_decls:       module-level data declarations
 # debug_files:      source file path table for debug info
 # debug_file_count: number of debug file entries
+# debug_file_cap:   allocated debug file capacity
 # target_arch:      target architecture name
 # target_os:        target operating system name
 # ptr_size:         pointer width in bytes
 pub rec Module {
     functions:        **fn.Function;
     func_count:       i32;
+    func_cap:         i32;
     data_decls:       data.DataDeclList;
     debug_files:      *str;
     debug_file_count: i32;
+    debug_file_cap:   i32;
     target_arch:      str;
     target_os:        str;
     ptr_size:         u8;
@@ -174,9 +178,11 @@ pub fun build(b: *ModuleBuilder) Module {
     var m: Module;
     m.functions = b.functions;
     m.func_count = b.func_count;
+    m.func_cap = b.func_cap;
     m.data_decls = b.data_decls;
     m.debug_files = b.debug_files;
     m.debug_file_count = b.debug_file_count;
+    m.debug_file_cap = b.debug_file_cap;
     m.target_arch = b.target_arch;
     m.target_os = b.target_os;
     m.ptr_size = b.ptr_size;
@@ -210,7 +216,7 @@ pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
         i = i + 1;
     }
     if (m.functions != nil) {
-        allocator.allocator_free[*fn.Function](alloc, m.functions, m.func_count::usize);
+        allocator.allocator_free[*fn.Function](alloc, m.functions, m.func_cap::usize);
         m.functions = nil;
     }
     m.func_count = 0;
@@ -218,7 +224,7 @@ pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
     data.list_dnit(alloc, ?m.data_decls);
 
     if (m.debug_files != nil) {
-        allocator.allocator_free[str](alloc, m.debug_files, m.debug_file_count::usize);
+        allocator.allocator_free[str](alloc, m.debug_files, m.debug_file_cap::usize);
         m.debug_files = nil;
     }
     m.debug_file_count = 0;
