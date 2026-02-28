@@ -10,7 +10,6 @@ use std.types.string;
 use std.types.result;
 
 use allocator: std.allocator;
-use dbg:       std.print;
 
 use inst:     masm.inst;
 use pool:     masm.pool;
@@ -82,29 +81,18 @@ pub rec Function {
 pub val FUNC_VARIADIC: u16 = 1;
 pub val FUNC_NORETURN: u16 = 2;
 
-# create_block: allocate a new empty block with the given label
+# block_init: create an empty block with the given label
 # ---
-# alloc: allocator
-# lbl:   label name for the block
-# ret:   pointer to new block, or error string
-pub fun create_block(alloc: *allocator.Allocator, lbl: str) Result[*Block, str] {
-    if (alloc == nil) {
-        ret err[*Block, str]("allocator is nil");
-    }
-
-    val r: Result[*Block, allocator.AllocError] = allocator.allocator_zalloc[Block](alloc, 1);
-    if (result_is_err[*Block, allocator.AllocError](r)) {
-        ret err[*Block, str]("out of memory");
-    }
-
-    val b: *Block = result_unwrap_ok[*Block, allocator.AllocError](r);
+# lbl: label name for the block
+# ret: initialized empty block
+pub fun block_init(lbl: str) Block {
+    var b: Block;
     b.label = lbl;
     b.insts = nil;
     b.debug_locs = nil;
     b.inst_count = 0;
     b.inst_cap = 0;
-
-    ret ok[*Block, str](b);
+    ret b;
 }
 
 # block_append: append an instruction to a block
@@ -132,7 +120,6 @@ pub fun block_append(alloc: *allocator.Allocator, block: *Block, i: inst.Instruc
             alloc, block.insts, block.inst_cap::usize, new_cap::usize
         );
         if (result_is_err[*inst.Instruction, allocator.AllocError](r)) {
-            dbg.eprintln("[masm] block_append: instruction buffer allocation failed");
             ret -1;
         }
         block.insts = result_unwrap_ok[*inst.Instruction, allocator.AllocError](r);
@@ -141,7 +128,6 @@ pub fun block_append(alloc: *allocator.Allocator, block: *Block, i: inst.Instruc
             alloc, block.debug_locs, block.inst_cap::usize, new_cap::usize
         );
         if (result_is_err[*DebugLoc, allocator.AllocError](dr)) {
-            dbg.eprintln("[masm] block_append: debug_locs allocation failed");
             ret -1;
         }
         block.debug_locs = result_unwrap_ok[*DebugLoc, allocator.AllocError](dr);
@@ -173,11 +159,11 @@ pub fun block_set_debug(block: *Block, idx: i32, line: i32, file: u16) {
     block.debug_locs[idx].src_file = file;
 }
 
-# block_free: free all memory owned by a block
+# block_dnit: free all internal memory owned by a block
 # ---
-# alloc: allocator used during creation/append
+# alloc: allocator used during append
 # block: pointer to block
-pub fun block_free(alloc: *allocator.Allocator, block: *Block) {
+pub fun block_dnit(alloc: *allocator.Allocator, block: *Block) {
     if (alloc == nil || block == nil) { ret; }
     if (block.insts != nil) {
         allocator.allocator_free[inst.Instruction](alloc, block.insts, block.inst_cap::usize);
@@ -189,25 +175,15 @@ pub fun block_free(alloc: *allocator.Allocator, block: *Block) {
     }
     block.inst_count = 0;
     block.inst_cap = 0;
-    allocator.allocator_free[Block](alloc, block, 1);
 }
 
-# create_function: allocate a new empty function with initialized pools
+# func_init: create an empty function with initialized pools
 # ---
-# alloc: allocator
+# alloc: allocator for pool initialization
 # name:  function name (symbol name)
-# ret:   pointer to new function, or error string
-pub fun create_function(alloc: *allocator.Allocator, name: str) Result[*Function, str] {
-    if (alloc == nil) {
-        ret err[*Function, str]("allocator is nil");
-    }
-
-    val r: Result[*Function, allocator.AllocError] = allocator.allocator_zalloc[Function](alloc, 1);
-    if (result_is_err[*Function, allocator.AllocError](r)) {
-        ret err[*Function, str]("out of memory");
-    }
-
-    val f: *Function = result_unwrap_ok[*Function, allocator.AllocError](r);
+# ret:   initialized function
+pub fun func_init(alloc: *allocator.Allocator, name: str) Function {
+    var f: Function;
     f.name = name;
     f.blocks = nil;
     f.block_count = 0;
@@ -218,8 +194,7 @@ pub fun create_function(alloc: *allocator.Allocator, name: str) Result[*Function
     f.labels = pool.label_init(alloc);
     f.data_pool = pool.data_init(alloc);
     f.type_descs = typedesc.init();
-
-    ret ok[*Function, str](f);
+    ret f;
 }
 
 # func_add_block: append a block to a function
@@ -245,7 +220,6 @@ pub fun func_add_block(alloc: *allocator.Allocator, func: *Function, block: *Blo
             alloc, func.blocks, func.block_cap::usize, new_cap::usize
         );
         if (result_is_err[**Block, allocator.AllocError](r)) {
-            dbg.eprintln("[masm] func_add_block: allocation failed");
             ret -1;
         }
 
@@ -260,17 +234,21 @@ pub fun func_add_block(alloc: *allocator.Allocator, func: *Function, block: *Blo
     ret idx;
 }
 
-# func_free: free all memory owned by a function, including blocks and pools
+# func_dnit: free all internal memory owned by a function
+#
+# frees all blocks (their internals and pointers), the block array,
+# and all per-function pools. does not free the function pointer itself.
 # ---
-# alloc: allocator used during creation
+# alloc: allocator used during construction
 # func:  pointer to function
-pub fun func_free(alloc: *allocator.Allocator, func: *Function) {
+pub fun func_dnit(alloc: *allocator.Allocator, func: *Function) {
     if (alloc == nil || func == nil) { ret; }
 
     var bi: i32 = 0;
     for (bi < func.block_count) {
         if (func.blocks[bi] != nil) {
-            block_free(alloc, func.blocks[bi]);
+            block_dnit(alloc, func.blocks[bi]);
+            allocator.allocator_free[Block](alloc, func.blocks[bi], 1);
         }
         bi = bi + 1;
     }
@@ -286,5 +264,4 @@ pub fun func_free(alloc: *allocator.Allocator, func: *Function) {
 
     func.block_count = 0;
     func.block_cap = 0;
-    allocator.allocator_free[Function](alloc, func, 1);
 }

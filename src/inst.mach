@@ -72,27 +72,27 @@ pub fun make_meta(cc: u8, size: u8, flag: u8) u8 {
     ret ((cc & 0xF) << 4) | ((encode_size(size) & 0x7) << 1) | (flag & 1);
 }
 
-# inst_cc: extract the condition code from an instruction's meta byte
+# cc: extract the condition code from an instruction's meta byte
 # ---
 # inst: pointer to instruction
 # ret:  condition code (4 bits, 0..15)
-pub fun inst_cc(inst: *Instruction) u8 {
+pub fun cc(inst: *Instruction) u8 {
     ret (inst.meta >> 4) & 0xF;
 }
 
-# inst_size: extract the operation size in bytes from an instruction's meta byte
+# size: extract the operation size in bytes from an instruction's meta byte
 # ---
 # inst: pointer to instruction
 # ret:  size in bytes (1, 2, 4, 8, 16, 32, 64, or 128)
-pub fun inst_size(inst: *Instruction) u8 {
+pub fun size(inst: *Instruction) u8 {
     ret decode_size((inst.meta >> 1) & 0x7);
 }
 
-# inst_flag: extract the flag bit from an instruction's meta byte
+# flag: extract the flag bit from an instruction's meta byte
 # ---
 # inst: pointer to instruction
 # ret:  flag bit (0 or 1)
-pub fun inst_flag(inst: *Instruction) u8 {
+pub fun flag(inst: *Instruction) u8 {
     ret inst.meta & 1;
 }
 
@@ -152,7 +152,7 @@ fun mk(o: u8, meta: u8, f0: u16, f1: u16, f2: u16) Instruction {
     ret i;
 }
 
-# mk_alu: three-register operation (f0=dst, f1=src1, f2=src2)
+# make_alu: three-register operation (f0=dst, f1=src1, f2=src2)
 #
 # covers integer arithmetic (OP_ADD..OP_SAR), float arithmetic
 # (OP_FADD..OP_FDIV), and OP_MEMSET.
@@ -163,11 +163,11 @@ fun mk(o: u8, meta: u8, f0: u16, f1: u16, f2: u16) Instruction {
 # src2: second source register
 # size: operation size in bytes
 # ret:  constructed instruction
-pub fun mk_alu(o: u8, dst: u16, src1: u16, src2: u16, size: u8) Instruction {
+pub fun make_alu(o: u8, dst: u16, src1: u16, src2: u16, size: u8) Instruction {
     ret mk(o, make_meta(0, size, 0), dst, src1, src2);
 }
 
-# mk_cmp: comparison (f0=dst, f1=src1, f2=src2, cc=condition)
+# make_cmp: comparison (f0=dst, f1=src1, f2=src2, cc=condition)
 #
 # dst receives 1 if the condition holds, 0 otherwise. covers OP_ICMP
 # and OP_FCMP.
@@ -179,11 +179,11 @@ pub fun mk_alu(o: u8, dst: u16, src1: u16, src2: u16, size: u8) Instruction {
 # cc:   condition code (CC_EQ, CC_LT, etc.)
 # size: operand size in bytes
 # ret:  constructed instruction
-pub fun mk_cmp(o: u8, dst: u16, src1: u16, src2: u16, cc: u8, size: u8) Instruction {
+pub fun make_cmp(o: u8, dst: u16, src1: u16, src2: u16, cc: u8, size: u8) Instruction {
     ret mk(o, make_meta(cc, size, 0), dst, src1, src2);
 }
 
-# mk_unary: register-to-register unary operation (f0=dst, f1=src)
+# make_unary: register-to-register unary operation (f0=dst, f1=src)
 #
 # covers OP_MOV (reg-reg copy), OP_ZEXT, OP_SEXT, OP_TRUNC, OP_ITOF,
 # OP_FEXT, and OP_FTRUNC. for OP_FTOI use mk_ftoi instead (it carries
@@ -194,11 +194,11 @@ pub fun mk_cmp(o: u8, dst: u16, src1: u16, src2: u16, cc: u8, size: u8) Instruct
 # src:  source register
 # size: destination size in bytes
 # ret:  constructed instruction
-pub fun mk_unary(o: u8, dst: u16, src: u16, size: u8) Instruction {
+pub fun make_unary(o: u8, dst: u16, src: u16, size: u8) Instruction {
     ret mk(o, make_meta(0, size, 0), dst, src, 0);
 }
 
-# mk_ftoi: float-to-integer conversion (f0=dst, f1=src, f2=src_float_size)
+# make_ftoi: float-to-integer conversion (f0=dst, f1=src, f2=src_float_size)
 #
 # unlike other unary ops, FTOI needs to know the source float size (4 or 8)
 # separately from the destination integer size. the source size is stored
@@ -209,11 +209,11 @@ pub fun mk_unary(o: u8, dst: u16, src: u16, size: u8) Instruction {
 # dst_size:       destination integer size in bytes
 # src_float_size: source float size in bytes (4=f32, 8=f64)
 # ret:            constructed instruction
-pub fun mk_ftoi(dst: u16, src: u16, dst_size: u8, src_float_size: u8) Instruction {
+pub fun make_ftoi(dst: u16, src: u16, dst_size: u8, src_float_size: u8) Instruction {
     ret mk(op.OP_FTOI, make_meta(0, dst_size, 0), dst, src, src_float_size::u16);
 }
 
-# mk_mov_imm32: move a 32-bit immediate from the data pool into a register
+# make_mov_imm32: move a 32-bit immediate from the data pool into a register
 #
 # the immediate value is stored in the data pool. distinguished from
 # reg-reg MOV by cc=1.
@@ -222,11 +222,11 @@ pub fun mk_ftoi(dst: u16, src: u16, dst_size: u8, src_float_size: u8) Instructio
 # pool_idx: data pool index containing the i32 value
 # size:     operation size in bytes
 # ret:      constructed instruction
-pub fun mk_mov_imm32(dst: u16, pool_idx: u16, size: u8) Instruction {
+pub fun make_mov_imm32(dst: u16, pool_idx: u16, size: u8) Instruction {
     ret mk(op.OP_MOV, make_meta(1, size, 0), dst, 0, pool_idx);
 }
 
-# mk_mov_imm64: move a 64-bit immediate from the constant pool into a register
+# make_mov_imm64: move a 64-bit immediate from the constant pool into a register
 #
 # the value is stored in the constant pool (u64). distinguished from
 # reg-reg MOV by flag=1.
@@ -235,22 +235,22 @@ pub fun mk_mov_imm32(dst: u16, pool_idx: u16, size: u8) Instruction {
 # pool_idx: constant pool index containing the u64 value
 # size:     operation size in bytes
 # ret:      constructed instruction
-pub fun mk_mov_imm64(dst: u16, pool_idx: u16, size: u8) Instruction {
+pub fun make_mov_imm64(dst: u16, pool_idx: u16, size: u8) Instruction {
     ret mk(op.OP_MOV, make_meta(0, size, 1), dst, 0, pool_idx);
 }
 
-# mk_load: load from memory at base+displacement
+# make_load: load from memory at base+displacement
 # ---
 # dst:      destination register
 # base:     base register
 # disp_idx: data pool index containing the i32 displacement
 # size:     load size in bytes
 # ret:      constructed instruction
-pub fun mk_load(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
+pub fun make_load(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
     ret mk(op.OP_LOAD, make_meta(0, size, 0), dst, base, disp_idx);
 }
 
-# mk_load_indexed: load from memory at base+index*scale+displacement
+# make_load_indexed: load from memory at base+index*scale+displacement
 #
 # the index register and displacement are packed into a single data pool
 # entry via pack_indexed. the scale factor is encoded in the meta cc field
@@ -262,22 +262,22 @@ pub fun mk_load(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
 # scale:      index scale factor (1, 2, 4, or 8)
 # size:       load size in bytes
 # ret:        constructed instruction
-pub fun mk_load_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
+pub fun make_load_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
     ret mk(op.OP_LOAD, make_meta(encode_scale(scale), size, 1), dst, base, packed_idx);
 }
 
-# mk_store: store to memory at base+displacement
+# make_store: store to memory at base+displacement
 # ---
 # src:      source register (value to store)
 # base:     base register
 # disp_idx: data pool index containing the i32 displacement
 # size:     store size in bytes
 # ret:      constructed instruction
-pub fun mk_store(src: u16, base: u16, disp_idx: u16, size: u8) Instruction {
+pub fun make_store(src: u16, base: u16, disp_idx: u16, size: u8) Instruction {
     ret mk(op.OP_STORE, make_meta(0, size, 0), src, base, disp_idx);
 }
 
-# mk_store_indexed: store to memory at base+index*scale+displacement
+# make_store_indexed: store to memory at base+index*scale+displacement
 # ---
 # src:        source register (value to store)
 # base:       base register
@@ -285,22 +285,22 @@ pub fun mk_store(src: u16, base: u16, disp_idx: u16, size: u8) Instruction {
 # scale:      index scale factor (1, 2, 4, or 8)
 # size:       store size in bytes
 # ret:        constructed instruction
-pub fun mk_store_indexed(src: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
+pub fun make_store_indexed(src: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
     ret mk(op.OP_STORE, make_meta(encode_scale(scale), size, 1), src, base, packed_idx);
 }
 
-# mk_addr: compute effective address of base+displacement (no memory access)
+# make_addr: compute effective address of base+displacement (no memory access)
 # ---
 # dst:      destination register
 # base:     base register
 # disp_idx: data pool index containing the i32 displacement
 # size:     pointer size in bytes
 # ret:      constructed instruction
-pub fun mk_addr(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
+pub fun make_addr(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
     ret mk(op.OP_ADDR, make_meta(0, size, 0), dst, base, disp_idx);
 }
 
-# mk_addr_indexed: compute effective address of base+index*scale+displacement
+# make_addr_indexed: compute effective address of base+index*scale+displacement
 # ---
 # dst:        destination register
 # base:       base register
@@ -308,11 +308,11 @@ pub fun mk_addr(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
 # scale:      index scale factor (1, 2, 4, or 8)
 # size:       pointer size in bytes
 # ret:        constructed instruction
-pub fun mk_addr_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
+pub fun make_addr_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
     ret mk(op.OP_ADDR, make_meta(encode_scale(scale), size, 1), dst, base, packed_idx);
 }
 
-# mk_addr_label: load the address of a label into a register
+# make_addr_label: load the address of a label into a register
 #
 # distinguished from base+disp ADDR by cc=1 and f1=0.
 # ---
@@ -320,85 +320,85 @@ pub fun mk_addr_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u
 # lbl_idx: label table index
 # size:    pointer size in bytes
 # ret:     constructed instruction
-pub fun mk_addr_label(dst: u16, lbl_idx: u16, size: u8) Instruction {
+pub fun make_addr_label(dst: u16, lbl_idx: u16, size: u8) Instruction {
     ret mk(op.OP_ADDR, make_meta(1, size, 0), dst, 0, lbl_idx);
 }
 
-# mk_jmp: unconditional jump to a label
+# make_jmp: unconditional jump to a label
 # ---
 # lbl_idx: label table index for the target
 # ret:     constructed instruction
-pub fun mk_jmp(lbl_idx: u16) Instruction {
+pub fun make_jmp(lbl_idx: u16) Instruction {
     ret mk(op.OP_JMP, 0, 0, 0, lbl_idx);
 }
 
-# mk_brcond: conditional branch to a label
+# make_brcond: conditional branch to a label
 # ---
 # cond_reg: register holding the condition value (nonzero = taken)
 # lbl_idx:  label table index for the target
 # cc:       condition code
 # ret:      constructed instruction
-pub fun mk_brcond(cond_reg: u16, lbl_idx: u16, cc: u8) Instruction {
+pub fun make_brcond(cond_reg: u16, lbl_idx: u16, cc: u8) Instruction {
     ret mk(op.OP_BRCOND, make_meta(cc, 0, 0), cond_reg, 0, lbl_idx);
 }
 
-# mk_call_direct: direct function call
+# make_call_direct: direct function call
 # ---
 # result_reg: register receiving the return value
 # lbl_idx:    label table index for the callee
 # tail:       true for tail call
 # size:       return value size in bytes
 # ret:        constructed instruction
-pub fun mk_call_direct(result_reg: u16, lbl_idx: u16, tail: bool, size: u8) Instruction {
+pub fun make_call_direct(result_reg: u16, lbl_idx: u16, tail: bool, size: u8) Instruction {
     var cc: u8 = 0;
     if (tail) { cc = op.CALL_TAIL; }
     ret mk(op.OP_CALL, make_meta(cc, size, 0), result_reg, 0, lbl_idx);
 }
 
-# mk_call_indirect: indirect function call through a register
+# make_call_indirect: indirect function call through a register
 # ---
 # result_reg: register receiving the return value
 # target_reg: register holding the callee address
 # tail:       true for tail call
 # size:       return value size in bytes
 # ret:        constructed instruction
-pub fun mk_call_indirect(result_reg: u16, target_reg: u16, tail: bool, size: u8) Instruction {
+pub fun make_call_indirect(result_reg: u16, target_reg: u16, tail: bool, size: u8) Instruction {
     var cc: u8 = 0;
     if (tail) { cc = op.CALL_TAIL; }
     ret mk(op.OP_CALL, make_meta(cc, size, 1), result_reg, target_reg, 0);
 }
 
-# mk_ret: return from function
+# make_ret: return from function
 # ---
 # ret: constructed instruction
-pub fun mk_ret() Instruction {
+pub fun make_ret() Instruction {
     ret mk(op.OP_RET, 0, 0, 0, 0);
 }
 
-# mk_label: label definition pseudo-instruction
+# make_label: label definition pseudo-instruction
 # ---
 # lbl_idx: label table index
 # ret:     constructed instruction
-pub fun mk_label(lbl_idx: u16) Instruction {
+pub fun make_label(lbl_idx: u16) Instruction {
     ret mk(op.OP_LABEL, 0, 0, 0, lbl_idx);
 }
 
-# mk_syscall: system call
+# make_syscall: system call
 # ---
 # result_reg: register receiving the syscall return value (0 if unused)
 # ret:        constructed instruction
-pub fun mk_syscall(result_reg: u16) Instruction {
+pub fun make_syscall(result_reg: u16) Instruction {
     ret mk(op.OP_SYSCALL, 0, result_reg, 0, 0);
 }
 
-# mk_nop: no-operation (tombstone for peephole elimination)
+# make_nop: no-operation (tombstone for peephole elimination)
 # ---
 # ret: constructed instruction
-pub fun mk_nop() Instruction {
+pub fun make_nop() Instruction {
     ret mk(op.OP_NOP, 0, 0, 0, 0);
 }
 
-# mk_param: receive a function parameter
+# make_param: receive a function parameter
 #
 # the type descriptor index references the TypeDescTable so the ABI
 # lowering pass can classify this parameter.
@@ -407,11 +407,11 @@ pub fun mk_nop() Instruction {
 # byte_size:     raw byte size of the parameter type
 # type_desc_idx: type descriptor table index
 # ret:           constructed instruction
-pub fun mk_param(param_idx: u8, byte_size: u16, type_desc_idx: u16) Instruction {
+pub fun make_param(param_idx: u8, byte_size: u16, type_desc_idx: u16) Instruction {
     ret mk(op.OP_PARAM, 0, param_idx::u16, byte_size, type_desc_idx);
 }
 
-# mk_arg: place a call argument
+# make_arg: place a call argument
 #
 # the type descriptor index references the TypeDescTable so the ABI
 # lowering pass can classify this argument.
@@ -421,21 +421,21 @@ pub fun mk_param(param_idx: u8, byte_size: u16, type_desc_idx: u16) Instruction 
 # type_desc_idx: type descriptor table index
 # size:          argument size in bytes
 # ret:           constructed instruction
-pub fun mk_arg(arg_idx: u8, value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
+pub fun make_arg(arg_idx: u8, value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
     ret mk(op.OP_ARG, make_meta(0, size, 0), arg_idx::u16, value_reg, type_desc_idx);
 }
 
-# mk_scarg: place a syscall argument
+# make_scarg: place a syscall argument
 # ---
 # arg_idx:   argument index (0-based)
 # value_reg: register holding the argument value
 # size:      argument size in bytes
 # ret:       constructed instruction
-pub fun mk_scarg(arg_idx: u8, value_reg: u16, size: u8) Instruction {
+pub fun make_scarg(arg_idx: u8, value_reg: u16, size: u8) Instruction {
     ret mk(op.OP_SCARG, make_meta(0, size, 0), arg_idx::u16, value_reg, 0);
 }
 
-# mk_retval: produce a return value
+# make_retval: produce a return value
 #
 # the type descriptor index references the TypeDescTable so the ABI
 # lowering pass can classify this return value.
@@ -444,11 +444,11 @@ pub fun mk_scarg(arg_idx: u8, value_reg: u16, size: u8) Instruction {
 # type_desc_idx: type descriptor table index
 # size:          return value size in bytes
 # ret:           constructed instruction
-pub fun mk_retval(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
+pub fun make_retval(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
     ret mk(op.OP_RETVAL, make_meta(0, size, 0), value_reg, 0, type_desc_idx);
 }
 
-# mk_atomic_load: atomic load from memory at base+displacement
+# make_atomic_load: atomic load from memory at base+displacement
 # ---
 # dst:      destination register
 # base:     base register
@@ -456,11 +456,11 @@ pub fun mk_retval(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
 # size:     load size in bytes
 # ordering: memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:      constructed instruction
-pub fun mk_atomic_load(dst: u16, base: u16, disp_idx: u16, size: u8, ordering: u8) Instruction {
+pub fun make_atomic_load(dst: u16, base: u16, disp_idx: u16, size: u8, ordering: u8) Instruction {
     ret mk(op.OP_ATOMIC_LOAD, make_meta(ordering, size, 0), dst, base, disp_idx);
 }
 
-# mk_atomic_store: atomic store to memory at base+displacement
+# make_atomic_store: atomic store to memory at base+displacement
 # ---
 # src:      source register (value to store)
 # base:     base register
@@ -468,11 +468,11 @@ pub fun mk_atomic_load(dst: u16, base: u16, disp_idx: u16, size: u8, ordering: u
 # size:     store size in bytes
 # ordering: memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:      constructed instruction
-pub fun mk_atomic_store(src: u16, base: u16, disp_idx: u16, size: u8, ordering: u8) Instruction {
+pub fun make_atomic_store(src: u16, base: u16, disp_idx: u16, size: u8, ordering: u8) Instruction {
     ret mk(op.OP_ATOMIC_STORE, make_meta(ordering, size, 0), src, base, disp_idx);
 }
 
-# mk_cmpxchg: atomic compare-and-swap
+# make_cmpxchg: atomic compare-and-swap
 #
 # semantics: old = *[base+disp]; if old == expected then *[base+disp] = new;
 # result = old. the expected register, new register, and displacement are
@@ -484,19 +484,19 @@ pub fun mk_atomic_store(src: u16, base: u16, disp_idx: u16, size: u8, ordering: 
 # size:       operand size in bytes
 # ordering:   memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:        constructed instruction
-pub fun mk_cmpxchg(result: u16, base: u16, packed_idx: u16, size: u8, ordering: u8) Instruction {
+pub fun make_cmpxchg(result: u16, base: u16, packed_idx: u16, size: u8, ordering: u8) Instruction {
     ret mk(op.OP_CMPXCHG, make_meta(ordering, size, 0), result, base, packed_idx);
 }
 
-# mk_fence: memory barrier
+# make_fence: memory barrier
 # ---
 # ordering: barrier strength (MO_RELAXED..MO_SEQ_CST)
 # ret:      constructed instruction
-pub fun mk_fence(ordering: u8) Instruction {
+pub fun make_fence(ordering: u8) Instruction {
     ret mk(op.OP_FENCE, make_meta(ordering, 0, 0), 0, 0, 0);
 }
 
-# mk_atomic_rmw: atomic read-modify-write
+# make_atomic_rmw: atomic read-modify-write
 #
 # semantics: old = *[base+disp]; *[base+disp] = op(old, operand);
 # result = old. the operand register, rmw operation, and displacement are
@@ -508,7 +508,7 @@ pub fun mk_fence(ordering: u8) Instruction {
 # size:       operand size in bytes
 # ordering:   memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:        constructed instruction
-pub fun mk_atomic_rmw(result: u16, base: u16, packed_idx: u16, size: u8, ordering: u8) Instruction {
+pub fun make_atomic_rmw(result: u16, base: u16, packed_idx: u16, size: u8, ordering: u8) Instruction {
     ret mk(op.OP_ATOMIC_RMW, make_meta(ordering, size, 0), result, base, packed_idx);
 }
 
