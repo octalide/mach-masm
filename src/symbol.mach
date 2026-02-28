@@ -11,9 +11,6 @@
 use std.types.bool;
 use std.types.size;
 use std.types.string;
-use std.types.result;
-
-use allocator: std.allocator;
 
 pub def SymBinding: u8;
 
@@ -86,37 +83,26 @@ pub rec Symbol {
     src_line: i32;
 }
 
-# create: allocate a new symbol with default values
+# init: create a symbol with default values
 #
 # the symbol starts as undefined, local, with no type. callers should
 # set binding, sym_type, and call define() when the definition site
 # is known.
 # ---
-# alloc: allocator
-# name:  symbol name
-# ret:   pointer to new symbol, or error string
-pub fun create(alloc: *allocator.Allocator, name: str) Result[*Symbol, str] {
-    if (alloc == nil) {
-        ret err[*Symbol, str]("allocator is nil");
-    }
-
-    val r: Result[*Symbol, allocator.AllocError] = allocator.allocator_zalloc[Symbol](alloc, 1);
-    if (result_is_err[*Symbol, allocator.AllocError](r)) {
-        ret err[*Symbol, str]("out of memory");
-    }
-
-    val sym: *Symbol = result_unwrap_ok[*Symbol, allocator.AllocError](r);
-    sym.name = name;
-    sym.binding = BIND_LOCAL;
-    sym.sym_type = SYM_NONE;
-    sym.section = 0;
-    sym.offset = 0;
-    sym.size = 0;
-    sym.defined = false;
-    sym.src_file = nil;
-    sym.src_line = 0;
-
-    ret ok[*Symbol, str](sym);
+# name: symbol name
+# ret:  initialized symbol
+pub fun init(name: str) Symbol {
+    var s: Symbol;
+    s.name = name;
+    s.binding = BIND_LOCAL;
+    s.sym_type = SYM_NONE;
+    s.section = 0;
+    s.offset = 0;
+    s.size = 0;
+    s.defined = false;
+    s.src_file = nil;
+    s.src_line = 0;
+    ret s;
 }
 
 # define: mark a symbol as defined at a specific location
@@ -160,11 +146,3 @@ pub fun is_function(sym: *Symbol) bool {
     ret sym.sym_type == SYM_FUNC;
 }
 
-# free: free a symbol
-# ---
-# alloc: allocator used during create
-# s:     pointer to symbol
-pub fun free(alloc: *allocator.Allocator, s: *Symbol) {
-    if (alloc == nil || s == nil) { ret; }
-    allocator.allocator_free[Symbol](alloc, s, 1);
-}

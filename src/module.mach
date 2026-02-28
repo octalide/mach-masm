@@ -204,7 +204,8 @@ pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
     var i: i32 = 0;
     for (i < m.func_count) {
         if (m.functions[i] != nil) {
-            fn.func_free(alloc, m.functions[i]);
+            fn.func_dnit(alloc, m.functions[i]);
+            allocator.allocator_free[fn.Function](alloc, m.functions[i], 1);
         }
         i = i + 1;
     }
