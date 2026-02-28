@@ -96,7 +96,7 @@ pub fun list_init(alloc: *allocator.Allocator) DataDeclList {
 # ret:  index of the appended declaration, or -1 on failure
 pub fun list_add(l: *DataDeclList, decl: DataDecl) i32 {
     if (l == nil) { ret -1; }
-    val r: Result[usize, str] = vec.vector_push[DataDecl](?l.decls, decl);
+    val r: Result[usize, str] = vec.push[DataDecl](?l.decls, decl);
     if (result_is_err[usize, str](r)) { ret -1; }
     ret (result_unwrap_ok[usize, str](r) - 1)::i32;
 }
@@ -108,7 +108,7 @@ pub fun list_add(l: *DataDeclList, decl: DataDecl) i32 {
 # ret:   pointer to the declaration, or nil if out of bounds
 pub fun list_get(l: *DataDeclList, index: i32) *DataDecl {
     if (l == nil || index < 0) { ret nil; }
-    val r: Result[*DataDecl, str] = vec.vector_get[DataDecl](?l.decls, index::usize);
+    val r: Result[*DataDecl, str] = vec.get[DataDecl](?l.decls, index::usize);
     if (result_is_err[*DataDecl, str](r)) { ret nil; }
     ret result_unwrap_ok[*DataDecl, str](r);
 }
@@ -134,7 +134,7 @@ pub fun list_dnit(alloc: *allocator.Allocator, l: *DataDeclList) {
         i = i + 1;
     }
 
-    vec.vector_dnit[DataDecl](?l.decls);
+    vec.dnit[DataDecl](?l.decls);
 }
 
 # make_bytes: create a DATA_BYTES declaration
