@@ -50,31 +50,36 @@ pub rec Block {
 
 # Function: a function in the IR
 #
-# owns an ordered array of blocks and three per-function pools for
-# values that exceed the 16-bit instruction field width.
+# owns an ordered array of blocks, four per-function pools for values
+# that exceed the 16-bit instruction field width, and function-level
+# metadata. stack frame layout (local sizes, call area) is derived by
+# the backend, not stored in the format.
 # ---
-# name:           function name (symbol name)
-# blocks:         array of block pointers
-# block_count:    number of blocks
-# block_cap:      allocated block capacity
-# param_count:    number of parameters
-# local_size:     total local variable stack size in bytes
-# call_area_size: largest outgoing call area size in bytes
-# const_pool:     per-function 64-bit constant pool
-# labels:         per-function label name table
-# data_pool:      per-function metadata byte pool
+# name:        function name (symbol name)
+# blocks:      array of block pointers
+# block_count: number of blocks
+# block_cap:   allocated block capacity
+# param_count: number of parameters
+# flags:       function-level flags (FUNC_VARIADIC, FUNC_NORETURN)
+# const_pool:  per-function 64-bit constant pool
+# labels:      per-function label name table
+# data_pool:   per-function metadata byte pool
+# type_descs:  per-function type descriptor table for ABI classification
 pub rec Function {
-    name:           str;
-    blocks:         **Block;
-    block_count:    i32;
-    block_cap:      i32;
-    param_count:    i32;
-    local_size:     usize;
-    call_area_size: usize;
-    const_pool:     pool.ConstPool;
-    labels:         pool.LabelTable;
-    data_pool:      pool.DataPool;
+    name:        str;
+    blocks:      **Block;
+    block_count: i32;
+    block_cap:   i32;
+    param_count: i32;
+    flags:       u16;
+    const_pool:  pool.ConstPool;
+    labels:      pool.LabelTable;
+    data_pool:   pool.DataPool;
+    type_descs:  pool.TypeDescTable;
 }
+
+pub val FUNC_VARIADIC: u16 = 1;
+pub val FUNC_NORETURN: u16 = 2;
 
 # create_block: allocate a new empty block with the given label
 # ---
@@ -207,11 +212,11 @@ pub fun create_function(alloc: *allocator.Allocator, name: str) Result[*Function
     f.block_count = 0;
     f.block_cap = 0;
     f.param_count = 0;
-    f.local_size = 0;
-    f.call_area_size = 0;
+    f.flags = 0;
     f.const_pool = pool.const_pool_init(alloc);
     f.labels = pool.label_table_init(alloc);
     f.data_pool = pool.data_pool_init(alloc);
+    f.type_descs = pool.typedesc_table_init();
 
     ret ok[*Function, str](f);
 }
@@ -276,6 +281,7 @@ pub fun func_destroy(alloc: *allocator.Allocator, func: *Function) {
     pool.const_pool_destroy(alloc, ?func.const_pool);
     pool.label_table_destroy(alloc, ?func.labels);
     pool.data_pool_destroy(alloc, ?func.data_pool);
+    pool.typedesc_table_destroy(alloc, ?func.type_descs);
 
     func.block_count = 0;
     func.block_cap = 0;
