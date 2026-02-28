@@ -202,7 +202,7 @@ pub fun func_add_block(func: *Function, block: *Block) i32 {
         ret -1;
     }
 
-    val r: Result[usize, str] = vec.vector_push[*Block](?func.blocks, block);
+    val r: Result[usize, str] = vec.push[*Block](?func.blocks, block);
     if (result_is_err[usize, str](r)) {
         ret -1;
     }
@@ -228,7 +228,7 @@ pub fun func_dnit(alloc: *allocator.Allocator, func: *Function) {
         }
         bi = bi + 1;
     }
-    vec.vector_dnit[*Block](?func.blocks);
+    vec.dnit[*Block](?func.blocks);
 
     pool.const_dnit(alloc, ?func.const_pool);
     pool.label_dnit(alloc, ?func.labels);

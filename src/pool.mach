@@ -61,7 +61,7 @@ pub fun const_intern(alloc: *allocator.Allocator, pool: *ConstPool, value: u64) 
         ret -1;
     }
 
-    val lookup: Result[*i32, str] = map.map_get[u64, i32](?pool.dedup, ?value);
+    val lookup: Result[*i32, str] = map.get[u64, i32](?pool.dedup, ?value);
     if (result_is_ok[*i32, str](lookup)) {
         ret @result_unwrap_ok[*i32, str](lookup);
     }
@@ -83,7 +83,7 @@ pub fun const_intern(alloc: *allocator.Allocator, pool: *ConstPool, value: u64) 
     val idx: i32 = pool.count;
     pool.values[idx] = value;
     pool.count = pool.count + 1;
-    map.map_insert[u64, i32](?pool.dedup, value, idx);
+    map.insert[u64, i32](?pool.dedup, value, idx);
     ret idx;
 }
 
@@ -103,7 +103,7 @@ pub fun const_get(pool: *ConstPool, idx: i32) u64 {
 # pool:  pointer to pool
 pub fun const_dnit(alloc: *allocator.Allocator, pool: *ConstPool) {
     if (alloc == nil || pool == nil) { ret; }
-    map.map_dnit[u64, i32](?pool.dedup);
+    map.dnit[u64, i32](?pool.dedup);
     if (pool.values != nil) {
         allocator.allocator_free[u64](alloc, pool.values, pool.cap::usize);
         pool.values = nil;
@@ -157,7 +157,7 @@ pub fun label_intern(alloc: *allocator.Allocator, tbl: *LabelTable, name: str) i
         ret -1;
     }
 
-    val lookup: Result[*i32, str] = map.map_get[str, i32](?tbl.dedup, ?name);
+    val lookup: Result[*i32, str] = map.get[str, i32](?tbl.dedup, ?name);
     if (result_is_ok[*i32, str](lookup)) {
         ret @result_unwrap_ok[*i32, str](lookup);
     }
@@ -179,7 +179,7 @@ pub fun label_intern(alloc: *allocator.Allocator, tbl: *LabelTable, name: str) i
     val idx: i32 = tbl.count;
     tbl.names[idx] = name;
     tbl.count = tbl.count + 1;
-    map.map_insert[str, i32](?tbl.dedup, name, idx);
+    map.insert[str, i32](?tbl.dedup, name, idx);
     ret idx;
 }
 
@@ -199,7 +199,7 @@ pub fun label_get(tbl: *LabelTable, idx: i32) str {
 # tbl:   pointer to table
 pub fun label_dnit(alloc: *allocator.Allocator, tbl: *LabelTable) {
     if (alloc == nil || tbl == nil) { ret; }
-    map.map_dnit[str, i32](?tbl.dedup);
+    map.dnit[str, i32](?tbl.dedup);
     if (tbl.names != nil) {
         allocator.allocator_free[str](alloc, tbl.names, tbl.cap::usize);
         tbl.names = nil;
@@ -304,7 +304,7 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
     }
 
     val h: u64 = hash_bytes(ptr, size);
-    val lookup: Result[*i32, str] = map.map_get[u64, i32](?pool.dedup, ?h);
+    val lookup: Result[*i32, str] = map.get[u64, i32](?pool.dedup, ?h);
     if (result_is_ok[*i32, str](lookup)) {
         val candidate: i32 = @result_unwrap_ok[*i32, str](lookup);
         if (candidate >= 0 && candidate < pool.count &&
@@ -368,7 +368,7 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
     pool.sizes[idx] = size;
     pool.count = pool.count + 1;
     pool.data_len = needed;
-    map.map_insert[u64, i32](?pool.dedup, h, idx);
+    map.insert[u64, i32](?pool.dedup, h, idx);
     ret idx;
 }
 
@@ -410,7 +410,7 @@ pub fun data_get_i32(pool: *DataPool, idx: i32) i32 {
 # pool:  pointer to pool
 pub fun data_dnit(alloc: *allocator.Allocator, pool: *DataPool) {
     if (alloc == nil || pool == nil) { ret; }
-    map.map_dnit[u64, i32](?pool.dedup);
+    map.dnit[u64, i32](?pool.dedup);
     if (pool.data != nil) {
         allocator.allocator_free[u8](alloc, pool.data, pool.data_cap::usize);
         pool.data = nil;

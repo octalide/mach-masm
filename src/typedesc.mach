@@ -79,7 +79,7 @@ pub fun init(alloc: *allocator.Allocator) TypeDescTable {
 # ret:  table index (>= 0), or -1 on failure
 pub fun intern(tbl: *TypeDescTable, desc: TypeDesc) i32 {
     if (tbl == nil) { ret -1; }
-    val r: Result[usize, str] = vec.vector_push[TypeDesc](?tbl.descs, desc);
+    val r: Result[usize, str] = vec.push[TypeDesc](?tbl.descs, desc);
     if (result_is_err[usize, str](r)) { ret -1; }
     ret (result_unwrap_ok[usize, str](r) - 1)::i32;
 }
@@ -91,7 +91,7 @@ pub fun intern(tbl: *TypeDescTable, desc: TypeDesc) i32 {
 # ret: pointer to type descriptor, or nil if out of bounds
 pub fun get(tbl: *TypeDescTable, idx: i32) *TypeDesc {
     if (tbl == nil || idx < 0) { ret nil; }
-    val r: Result[*TypeDesc, str] = vec.vector_get[TypeDesc](?tbl.descs, idx::usize);
+    val r: Result[*TypeDesc, str] = vec.get[TypeDesc](?tbl.descs, idx::usize);
     if (result_is_err[*TypeDesc, str](r)) { ret nil; }
     ret result_unwrap_ok[*TypeDesc, str](r);
 }
@@ -114,7 +114,7 @@ pub fun dnit(alloc: *allocator.Allocator, tbl: *TypeDescTable) {
         i = i + 1;
     }
 
-    vec.vector_dnit[TypeDesc](?tbl.descs);
+    vec.dnit[TypeDesc](?tbl.descs);
 }
 
 # make_int: create a scalar integer type descriptor
