@@ -1,0 +1,170 @@
+# masm.symbol: symbols, sections, and relocations
+#
+# defines the types that describe linkage-level concerns: symbol
+# binding and kind, section classification, and relocation types.
+# these are the vocabulary shared between MASM modules and any object
+# format backend (ELF, Mach-O, COFF, WASM).
+#
+# MASM is the canonical source for these constants. object format
+# implementations consume them — they do not redefine them.
+
+use std.types.bool;
+use std.types.size;
+use std.types.string;
+use std.types.result;
+
+use allocator: std.allocator;
+
+pub def SymBinding: u8;
+
+pub val BIND_LOCAL:  SymBinding = 0;
+pub val BIND_GLOBAL: SymBinding = 1;
+pub val BIND_WEAK:   SymBinding = 2;
+
+pub def SymKind: u8;
+
+pub val SYM_NONE:    SymKind = 0;
+pub val SYM_FUNC:    SymKind = 1;
+pub val SYM_OBJECT:  SymKind = 2;
+pub val SYM_SECTION: SymKind = 3;
+pub val SYM_FILE:    SymKind = 4;
+
+pub def SectionKind: u8;
+
+pub val SEC_TEXT:   SectionKind = 0;
+pub val SEC_DATA:   SectionKind = 1;
+pub val SEC_RODATA: SectionKind = 2;
+pub val SEC_BSS:    SectionKind = 3;
+pub val SEC_CUSTOM: SectionKind = 4;
+
+pub def SectionFlags: u32;
+
+pub val FLAG_WRITE: SectionFlags = 1;
+pub val FLAG_EXEC:  SectionFlags = 2;
+pub val FLAG_ALLOC: SectionFlags = 4;
+
+# RelocKind: target-independent relocation types
+#
+# object format backends map these to format-specific values (e.g. ELF
+# R_X86_64_*, Mach-O relocation types, COFF IMAGE_REL_*).
+pub def RelocKind: u8;
+
+pub val RELOC_NONE:   RelocKind = 0;
+pub val RELOC_ABS64:  RelocKind = 1;
+pub val RELOC_REL32:  RelocKind = 2;
+pub val RELOC_CALL32: RelocKind = 3;
+pub val RELOC_ABS32:  RelocKind = 4;
+pub val RELOC_ABS32S: RelocKind = 5;
+
+pub val ENDIAN_LITTLE: u8 = 0;
+pub val ENDIAN_BIG:    u8 = 1;
+
+# Symbol: a named entity in the module
+#
+# represents functions, global variables, sections, and external
+# references. produced during lowering and consumed by the object
+# format emission pass.
+# ---
+# name:     symbol name
+# binding:  visibility/linkage (local, global, weak)
+# sym_type: entity kind (func, object, section, file)
+# section:  section index (not a pointer)
+# offset:   byte offset within section
+# size:     size in bytes
+# defined:  true if defined here, false if external reference
+# src_file: source file path for debug info
+# src_line: source line number for debug info
+pub rec Symbol {
+    name:     str;
+    binding:  SymBinding;
+    sym_type: SymKind;
+    section:  u64;
+    offset:   usize;
+    size:     usize;
+    defined:  bool;
+    src_file: str;
+    src_line: i32;
+}
+
+# create: allocate a new symbol with default values
+#
+# the symbol starts as undefined, local, with no type. callers should
+# set binding, sym_type, and call define() when the definition site
+# is known.
+# ---
+# alloc: allocator
+# name:  symbol name
+# ret:   pointer to new symbol, or error string
+pub fun create(alloc: *allocator.Allocator, name: str) Result[*Symbol, str] {
+    if (alloc == nil) {
+        ret err[*Symbol, str]("allocator is nil");
+    }
+
+    val r: Result[*Symbol, allocator.AllocError] = allocator.allocator_zalloc[Symbol](alloc, 1);
+    if (result_is_err[*Symbol, allocator.AllocError](r)) {
+        ret err[*Symbol, str]("out of memory");
+    }
+
+    val sym: *Symbol = result_unwrap_ok[*Symbol, allocator.AllocError](r);
+    sym.name = name;
+    sym.binding = BIND_LOCAL;
+    sym.sym_type = SYM_NONE;
+    sym.section = 0;
+    sym.offset = 0;
+    sym.size = 0;
+    sym.defined = false;
+    sym.src_file = nil;
+    sym.src_line = 0;
+
+    ret ok[*Symbol, str](sym);
+}
+
+# define: mark a symbol as defined at a specific location
+# ---
+# sym:     pointer to symbol
+# section: section index
+# offset:  byte offset within section
+# size:    size in bytes
+pub fun define(sym: *Symbol, section: u64, offset: usize, size: usize) {
+    if (sym == nil) { ret; }
+    sym.section = section;
+    sym.offset = offset;
+    sym.size = size;
+    sym.defined = true;
+}
+
+# is_defined: test whether a symbol has a definition
+# ---
+# sym: pointer to symbol
+# ret: true if defined here
+pub fun is_defined(sym: *Symbol) bool {
+    if (sym == nil) { ret false; }
+    ret sym.defined;
+}
+
+# is_global: test whether a symbol has global binding
+# ---
+# sym: pointer to symbol
+# ret: true if globally visible
+pub fun is_global(sym: *Symbol) bool {
+    if (sym == nil) { ret false; }
+    ret sym.binding == BIND_GLOBAL;
+}
+
+# is_function: test whether a symbol represents a function
+# ---
+# sym: pointer to symbol
+# ret: true if SYM_FUNC
+pub fun is_function(sym: *Symbol) bool {
+    if (sym == nil) { ret false; }
+    ret sym.sym_type == SYM_FUNC;
+}
+
+# destroy: free a symbol
+# ---
+# alloc: allocator used during create
+# s:     pointer to symbol
+pub fun destroy(alloc: *allocator.Allocator, s: *Symbol) {
+    if (alloc == nil || s == nil) { ret; }
+    allocator.allocator_free[Symbol](alloc, s, 1);
+}
