@@ -212,8 +212,8 @@ pub fun label_table_destroy(alloc: *allocator.Allocator, tbl: *LabelTable) {
 # DataPool: per-function byte pool for instruction metadata
 #
 # stores variable-width binary data referenced by instruction f2 fields:
-# displacements (i32), packed indexed memory operands, packed ABI
-# descriptors, etc. entries are 8-byte aligned so typed reads via pointer
+# displacements (i32), packed indexed memory operands, and other
+# metadata. entries are 8-byte aligned so typed reads via pointer
 # cast are safe. deduplicates on intern via FNV-1a hash.
 # ---
 # data:     backing byte buffer
