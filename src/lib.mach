@@ -4,9 +4,9 @@
 # symbols, data declarations, and the immutable Module container.
 # consumed by compiler backends, linkers, and analysis tools.
 
-pub use masm.inst;
-pub use masm.pool;
-pub use masm.symbol;
-pub use masm.function;
-pub use masm.data;
-pub use masm.module;
+use masm.inst;
+use masm.pool;
+use masm.symbol;
+use masm.function;
+use masm.data;
+use masm.module;

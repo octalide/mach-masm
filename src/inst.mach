@@ -66,27 +66,20 @@ pub val OP_FDIV:    Operator = 33;
 pub val OP_LABEL:   Operator = 34;
 pub val OP_SYSCALL: Operator = 35;
 
-# ABI-abstract operations
+# calling and parameter passing
 #
-# these are emitted by lowering and expanded by a target-specific ABI
-# pass. pre-ABI instructions carry type metadata (size, alignment,
-# float/aggregate flags) so the ABI pass can classify arguments into
-# registers, stack slots, or hidden pointers.
+# OP_ARG, OP_PARAM, and OP_RETVAL carry type descriptor indices in f2
+# so any ABI lowering pass can classify arguments and return values
+# into registers, stack slots, or hidden pointers without the format
+# encoding any ABI-specific metadata.
 #
-# OP_ARG:    f0=arg_idx, f1=value_reg, f2=[pool] packed(byte_size:u16|flags:u8|align:u8)
-# OP_PARAM:  f0=param_idx, f1=raw_byte_size, f2=[pool] disp
-#            meta = align_log2:3<<2 | agg:1<<1 | float:1
-#            param_idx 254=sret, 255=vararg_save
-# OP_RETVAL: f0=value_reg, f1=0, f2=[pool] packed(byte_size:u16|flags:u8|align:u8)
-# OP_SCARG:  f0=arg_idx, f1=value_reg, f2=0
-#
-# OP_CALL pre-ABI:
-#   direct:   f0=result_reg, f1=ret_meta, f2=[label] label_idx
-#   indirect: f0=result_reg, f1=target_reg, f2=[pool] ret_meta_packed, flag=1
-#   meta.cc = call_flags (bit0=variadic, bit1=tail)
-# OP_CALL post-ABI:
-#   direct:   f0=0, f1=0, f2=[label] label_idx
-#   indirect: f0=0, f1=target_reg, f2=0, flag=1
+# OP_CALL:    direct:   f0=result_reg, f1=0, f2=[label] label_idx (flag=0)
+#             indirect: f0=result_reg, f1=target_reg, f2=0 (flag=1)
+#             meta.cc bit 0 = tail call
+# OP_ARG:     f0=arg_idx, f1=value_reg, f2=type_desc_idx
+# OP_PARAM:   f0=param_idx, f1=byte_size, f2=type_desc_idx
+# OP_RETVAL:  f0=value_reg, f1=0, f2=type_desc_idx
+# OP_SCARG:   f0=arg_idx, f1=value_reg, f2=0
 pub val OP_ARG:     Operator = 36;
 pub val OP_PARAM:   Operator = 37;
 pub val OP_RETVAL:  Operator = 38;
@@ -139,11 +132,7 @@ pub val RMW_OR:   u8 = 3;
 pub val RMW_XOR:  u8 = 4;
 pub val RMW_XCHG: u8 = 5;
 
-pub val ABI_FLAG_FLOAT: u8 = 1;
-pub val ABI_FLAG_AGG:   u8 = 2;
-
-pub val CALL_VARIADIC: u8 = 1;
-pub val CALL_TAIL:     u8 = 2;
+pub val CALL_TAIL: u8 = 1;
 
 # physical registers occupy IDs 0-29. VREG_SP and VREG_FP are fixed
 # virtual registers for the stack and frame pointers. user-allocated
@@ -152,10 +141,6 @@ pub val VREG_SP:    i32 = 30;
 pub val VREG_FP:    i32 = 31;
 pub val VREG_START: i32 = 32;
 pub val REG_NONE:   u8  = 0;
-
-pub val PARAM_SRET:    u8 = 254;
-pub val PARAM_VARARGS: u8 = 255;
-pub val ARG_SRET:      u8 = 254;
 
 # Instruction record (8 bytes)
 #
@@ -260,78 +245,6 @@ pub fun src2_reg(inst: *Instruction) u16 { ret inst.f2; }
 # inst: pointer to instruction
 # ret:  label table index from f2
 pub fun label_idx(inst: *Instruction) i32 { ret inst.f2::i32; }
-
-# make_abi_meta: pack ABI type metadata into a single byte
-#
-# used in OP_CALL's f1 field (pre-ABI) to describe the return type.
-# layout: size_log2:3 | align_log2:3 | agg:1 | float:1
-# ---
-# size:     byte size of the type
-# align:    alignment requirement in bytes
-# is_agg:   true if aggregate (struct/array)
-# is_float: true if floating-point
-# ret:      packed ABI metadata byte
-pub fun make_abi_meta(size: u8, align: u8, is_agg: bool, is_float: bool) u8 {
-    var m: u8 = encode_size(size) << 5;
-    m = m | (encode_size(align) << 2);
-    if (is_agg) { m = m | 2; }
-    if (is_float) { m = m | 1; }
-    ret m;
-}
-
-# abi_byte_size: extract byte size from a packed ABI metadata byte
-# ---
-# meta: packed ABI metadata byte
-# ret:  byte size
-pub fun abi_byte_size(meta: u8) u8 { ret decode_size((meta >> 5) & 7); }
-
-# abi_align: extract alignment from a packed ABI metadata byte
-# ---
-# meta: packed ABI metadata byte
-# ret:  alignment in bytes
-pub fun abi_align(meta: u8) u8 { ret decode_size((meta >> 2) & 7); }
-
-# abi_is_agg: test the aggregate flag in a packed ABI metadata byte
-# ---
-# meta: packed ABI metadata byte
-# ret:  true if aggregate
-pub fun abi_is_agg(meta: u8) bool { ret (meta & 2) != 0; }
-
-# abi_is_float: test the float flag in a packed ABI metadata byte
-# ---
-# meta: packed ABI metadata byte
-# ret:  true if floating-point
-pub fun abi_is_float(meta: u8) bool { ret (meta & 1) != 0; }
-
-# pack_arg_meta: pack OP_ARG/OP_RETVAL type metadata into a 32-bit pool value
-#
-# layout: bits 0..15 = byte_size, bits 16..23 = flags, bits 24..31 = align
-# ---
-# byte_size: size in bytes (up to 65535)
-# flags:     ABI type flags (ABI_FLAG_FLOAT, ABI_FLAG_AGG)
-# align:     alignment in bytes
-# ret:       packed 32-bit value for pool storage
-pub fun pack_arg_meta(byte_size: i32, flags: u8, align: u8) i32 {
-    ret (byte_size & 0xFFFF) | (flags::i32 << 16) | (align::i32 << 24);
-}
-
-# unpack_arg_size: extract byte size from a packed arg metadata value
-# ---
-# packed: 32-bit packed value from pack_arg_meta
-# ret:    byte size from bits 0..15
-pub fun unpack_arg_size(packed: i32) i32 { ret packed & 0xFFFF; }
-
-# unpack_arg_flags: extract ABI flags from a packed arg metadata value
-# ---
-# packed: 32-bit packed value from pack_arg_meta
-# ret:    flags byte from bits 16..23
-pub fun unpack_arg_flags(packed: i32) u8 { ret (packed >> 16)::u8; }
-
-# unpack_arg_align: extract alignment from a packed arg metadata value
-# ---
-# packed: 32-bit packed value from pack_arg_meta
-# ret:    alignment byte from bits 24..31
-pub fun unpack_arg_align(packed: i32) u8 { ret (packed >> 24)::u8; }
 
 # encode_scale: encode a memory index scale factor as a 2-bit log2 value
 # ---
@@ -566,54 +479,30 @@ pub fun mk_brcond(cond_reg: u16, lbl_idx: u16, cc: u8) Instruction {
     ret mk(OP_BRCOND, make_meta(cc, 0, 0), cond_reg, 0, lbl_idx);
 }
 
-# mk_call_direct: direct function call (pre-ABI form)
-#
-# carries return type metadata so the ABI pass can classify the result.
+# mk_call_direct: direct function call
 # ---
 # result_reg: register receiving the return value
-# ret_meta:   packed ABI metadata for the return type (from make_abi_meta)
 # lbl_idx:    label table index for the callee
-# call_flags: CALL_VARIADIC, CALL_TAIL, or 0
+# tail:       true for tail call
 # size:       return value size in bytes
 # ret:        constructed instruction
-pub fun mk_call_direct(result_reg: u16, ret_meta: u8, lbl_idx: u16,
-                       call_flags: u8, size: u8) Instruction {
-    ret mk(OP_CALL, make_meta(call_flags, size, 0),
-           result_reg, ret_meta::u16, lbl_idx);
+pub fun mk_call_direct(result_reg: u16, lbl_idx: u16, tail: bool, size: u8) Instruction {
+    var cc: u8 = 0;
+    if (tail) { cc = CALL_TAIL; }
+    ret mk(OP_CALL, make_meta(cc, size, 0), result_reg, 0, lbl_idx);
 }
 
-# mk_call_indirect: indirect function call through a register (pre-ABI form)
+# mk_call_indirect: indirect function call through a register
 # ---
-# result_reg:   register receiving the return value
-# target_reg:   register holding the callee address
-# ret_meta_idx: data pool index containing packed return type metadata
-# call_flags:   CALL_VARIADIC, CALL_TAIL, or 0
-# size:         return value size in bytes
-# ret:          constructed instruction
-pub fun mk_call_indirect(result_reg: u16, target_reg: u16,
-                         ret_meta_idx: u16,
-                         call_flags: u8, size: u8) Instruction {
-    ret mk(OP_CALL, make_meta(call_flags, size, 1),
-           result_reg, target_reg, ret_meta_idx);
-}
-
-# mk_call_lowered: direct call after ABI lowering
-#
-# all argument/return plumbing has been expanded into explicit register
-# moves. the call instruction itself is just a jump-and-link.
-# ---
-# lbl_idx: label table index for the callee
-# ret:     constructed instruction
-pub fun mk_call_lowered(lbl_idx: u16) Instruction {
-    ret mk(OP_CALL, make_meta(0, 0, 0), 0, 0, lbl_idx);
-}
-
-# mk_call_lowered_indirect: indirect call after ABI lowering
-# ---
+# result_reg: register receiving the return value
 # target_reg: register holding the callee address
+# tail:       true for tail call
+# size:       return value size in bytes
 # ret:        constructed instruction
-pub fun mk_call_lowered_indirect(target_reg: u16) Instruction {
-    ret mk(OP_CALL, make_meta(0, 0, 1), 0, target_reg, 0);
+pub fun mk_call_indirect(result_reg: u16, target_reg: u16, tail: bool, size: u8) Instruction {
+    var cc: u8 = 0;
+    if (tail) { cc = CALL_TAIL; }
+    ret mk(OP_CALL, make_meta(cc, size, 1), result_reg, target_reg, 0);
 }
 
 # mk_ret: return from function
@@ -646,32 +535,31 @@ pub fun mk_nop() Instruction {
     ret mk(OP_NOP, 0, 0, 0, 0);
 }
 
-# mk_param: receive a function parameter (pre-ABI)
+# mk_param: receive a function parameter
+#
+# the type descriptor index references the TypeDescTable so the ABI
+# lowering pass can classify this parameter.
 # ---
-# param_idx: parameter index (0-based, or PARAM_SRET/PARAM_VARARGS)
-# byte_size: raw byte size of the parameter type
-# align:     alignment requirement in bytes
-# is_agg:    true if aggregate type
-# is_float:  true if floating-point type
-# disp_idx:  data pool index for stack frame displacement
-# ret:       constructed instruction
-pub fun mk_param(param_idx: u8, byte_size: u16, align: u8,
-                 is_agg: bool, is_float: bool, disp_idx: u16) Instruction {
-    var m: u8 = encode_size(align) << 2;
-    if (is_agg) { m = m | 2; }
-    if (is_float) { m = m | 1; }
-    ret mk(OP_PARAM, m, param_idx::u16, byte_size, disp_idx);
+# param_idx:     parameter index (0-based)
+# byte_size:     raw byte size of the parameter type
+# type_desc_idx: type descriptor table index
+# ret:           constructed instruction
+pub fun mk_param(param_idx: u8, byte_size: u16, type_desc_idx: u16) Instruction {
+    ret mk(OP_PARAM, 0, param_idx::u16, byte_size, type_desc_idx);
 }
 
-# mk_arg: place a call argument (pre-ABI)
+# mk_arg: place a call argument
+#
+# the type descriptor index references the TypeDescTable so the ABI
+# lowering pass can classify this argument.
 # ---
-# arg_idx:    argument index (0-based, or ARG_SRET)
-# value_reg:  register holding the argument value
-# packed_idx: data pool index for packed type metadata (from pack_arg_meta)
-# size:       argument size in bytes
-# ret:        constructed instruction
-pub fun mk_arg(arg_idx: u8, value_reg: u16, packed_idx: u16, size: u8) Instruction {
-    ret mk(OP_ARG, make_meta(0, size, 0), arg_idx::u16, value_reg, packed_idx);
+# arg_idx:       argument index (0-based)
+# value_reg:     register holding the argument value
+# type_desc_idx: type descriptor table index
+# size:          argument size in bytes
+# ret:           constructed instruction
+pub fun mk_arg(arg_idx: u8, value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
+    ret mk(OP_ARG, make_meta(0, size, 0), arg_idx::u16, value_reg, type_desc_idx);
 }
 
 # mk_scarg: place a syscall argument
@@ -684,14 +572,17 @@ pub fun mk_scarg(arg_idx: u8, value_reg: u16, size: u8) Instruction {
     ret mk(OP_SCARG, make_meta(0, size, 0), arg_idx::u16, value_reg, 0);
 }
 
-# mk_retval: produce a return value (pre-ABI)
+# mk_retval: produce a return value
+#
+# the type descriptor index references the TypeDescTable so the ABI
+# lowering pass can classify this return value.
 # ---
-# value_reg:  register holding the return value
-# packed_idx: data pool index for packed type metadata (from pack_arg_meta)
-# size:       return value size in bytes
-# ret:        constructed instruction
-pub fun mk_retval(value_reg: u16, packed_idx: u16, size: u8) Instruction {
-    ret mk(OP_RETVAL, make_meta(0, size, 0), value_reg, 0, packed_idx);
+# value_reg:     register holding the return value
+# type_desc_idx: type descriptor table index
+# size:          return value size in bytes
+# ret:           constructed instruction
+pub fun mk_retval(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
+    ret mk(OP_RETVAL, make_meta(0, size, 0), value_reg, 0, type_desc_idx);
 }
 
 # mk_atomic_load: atomic load from memory at base+displacement
