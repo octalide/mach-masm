@@ -1,0 +1,12 @@
+# masm: target-independent intermediate assembly format
+#
+# provides the core types for MASM: instructions, per-function pools,
+# symbols, data declarations, and the immutable Module container.
+# consumed by compiler backends, linkers, and analysis tools.
+
+pub use masm.inst;
+pub use masm.pool;
+pub use masm.symbol;
+pub use masm.function;
+pub use masm.data;
+pub use masm.module;
