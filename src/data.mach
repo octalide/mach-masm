@@ -134,14 +134,14 @@ pub fun list_get(l: *DataDeclList, index: i32) *DataDecl {
     ret ?l.decls[index];
 }
 
-# list_destroy: free a list and all owned memory
+# list_dnit: free a list and all owned memory
 #
 # frees per-declaration relocation arrays and data buffers, then the
 # backing array itself.
 # ---
 # alloc: allocator used during construction
 # l:     pointer to list
-pub fun list_destroy(alloc: *allocator.Allocator, l: *DataDeclList) {
+pub fun list_dnit(alloc: *allocator.Allocator, l: *DataDeclList) {
     if (alloc == nil || l == nil) { ret; }
 
     var i: i32 = 0;
