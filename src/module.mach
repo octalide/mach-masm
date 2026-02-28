@@ -9,6 +9,7 @@
 use std.types.bool;
 use std.types.size;
 use std.types.result;
+use std.types.string;
 
 use allocator: std.allocator;
 use fn:        masm.function;
@@ -145,7 +146,7 @@ pub fun builder_add_debug_file(b: *ModuleBuilder, path: str) u16 {
 
     var i: i32 = 0;
     for (i < b.debug_file_count) {
-        if (b.debug_files[i] != nil && str_eq(b.debug_files[i], path)) {
+        if (b.debug_files[i] != nil && str_equals(b.debug_files[i], path)) {
             ret (i + 1)::u16;
         }
         i = i + 1;
@@ -230,14 +231,3 @@ pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
     m.debug_file_count = 0;
 }
 
-fun str_eq(a: str, b: str) bool {
-    if (a == nil && b == nil) { ret true; }
-    if (a == nil || b == nil) { ret false; }
-    if (a == b) { ret true; }
-    var i: usize = 0;
-    for (a[i] != 0 && b[i] != 0) {
-        if (a[i] != b[i]) { ret false; }
-        i = i + 1;
-    }
-    ret a[i] == b[i];
-}
