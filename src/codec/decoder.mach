@@ -15,16 +15,13 @@ use bytebuf:   std.io.bytebuf;
 use vec:       std.collections.vector;
 use mem:       std.memory;
 
-use op:      masm.op;
 use inst:    masm.inst;
 use pool:    masm.pool;
 use td:      masm.typedesc;
-use sym:     masm.symbol;
 use fn:      masm.function;
 use data:    masm.data;
 use mod:     masm.module;
 use strtab:  masm.strtab;
-use symtab:  masm.symtab;
 use enc:     masm.codec.encoder;
 
 # decode: deserialize a .mo byte buffer into a Module
@@ -77,12 +74,11 @@ pub fun decode(alloc: *allocator.Allocator, raw: *u8, len: usize) Result[mod.Mod
             ret err[mod.Module, str]("truncated debug file table");
         }
         val off: u32 = result_unwrap_ok[u32, str](off_r);
-        val name: str = strtab.str_get(?stab, off);
-        if (name != nil && str_len(name) > 0) {
-            mod.builder_add_debug_file(?mb, name);
-        } or {
-            vec.push[str](?mb.debug_files, nil);
+        var name: str = nil;
+        if (off > 0) {
+            name = strtab.str_get(?stab, off);
         }
+        vec.push[str](?mb.debug_files, name);
         dfi = dfi + 1;
     }
 
@@ -246,7 +242,7 @@ fun decode_function(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
         ret err[*fn.Function, str](result_unwrap_err[bool, str](tdr));
     }
 
-    val br: Result[bool, str] = decode_blocks(alloc, buf, f, block_count, inst_count);
+    val br: Result[bool, str] = decode_blocks(alloc, buf, stab, f, block_count, inst_count);
     if (result_is_err[bool, str](br)) {
         ret err[*fn.Function, str](result_unwrap_err[bool, str](br));
     }
@@ -359,14 +355,20 @@ fun decode_type_descs(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
             }
         }
 
-        td.intern(tdt, td.make_agg(total_size, align, fields, field_count));
+        var desc: td.TypeDesc;
+        desc.kind = kind;
+        desc.total_size = total_size;
+        desc.align = align;
+        desc.field_count = field_count;
+        desc.fields = fields;
+        td.intern(tdt, desc);
         i = i + 1;
     }
     ret ok[bool, str](true);
 }
 
 fun decode_blocks(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
-                  f: *fn.Function, block_count: u16,
+                  stab: *strtab.Reader, f: *fn.Function, block_count: u16,
                   total_inst_count: u32) Result[bool, str] {
     val br: Result[*u8, allocator.AllocError] =
         allocator.allocator_alloc[u8](alloc, block_count::usize * 8);
@@ -399,7 +401,7 @@ fun decode_blocks(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
         val label_off: u32 = @((block_table::usize + off)::*u32);
         val blk_inst_count: u32 = @((block_table::usize + off + 4)::*u32);
 
-        val label: str = strtab.str_get(buf, label_off);
+        val label: str = strtab.str_get(stab, label_off);
 
         val ba: Result[*fn.Block, allocator.AllocError] =
             allocator.allocator_alloc[fn.Block](alloc, 1);
