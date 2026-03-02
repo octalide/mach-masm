@@ -690,18 +690,19 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         if (l.cur.kind == TOK_REG) {
             val src: u16 = parse_reg(l);
             fn.block_append(alloc, blk, inst.make_unary(op.OP_MOV, dst, src, sz));
-        } or (l.cur.kind == TOK_MINUS || l.cur.kind == TOK_INT) {
-            val v: i32 = parse_signed_int(l);
-            if (v::i64 >= -2147483648 && v::i64 <= 2147483647) {
-                val off: i32 = pool.data_intern_i32(alloc, ?f.data_pool, v);
-                fn.block_append(alloc, blk, inst.make_mov_imm32(dst, off::u16, sz));
-            } or {
-                val off: i32 = pool.const_intern(alloc, ?f.const_pool, v::u64);
-                fn.block_append(alloc, blk, inst.make_mov_imm64(dst, off::u16, sz));
-            }
         } or {
-            val v: i64 = l.cur.ival;
-            lex_next(l);
+            var neg: bool = false;
+            if (l.cur.kind == TOK_MINUS) {
+                neg = true;
+                lex_next(l);
+            }
+            var v: i64 = 0;
+            if (l.cur.kind == TOK_INT) {
+                v = l.cur.ival;
+                lex_next(l);
+            }
+            if (neg) { v = 0 - v; }
+
             if (v >= -2147483648 && v <= 2147483647) {
                 val off: i32 = pool.data_intern_i32(alloc, ?f.data_pool, v::i32);
                 fn.block_append(alloc, blk, inst.make_mov_imm32(dst, off::u16, sz));
