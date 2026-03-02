@@ -1023,8 +1023,15 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
     expect_comma(l);
     val src1: u16 = parse_reg(l);
     expect_comma(l);
-    val src2: u16 = parse_reg(l);
-    fn.block_append(alloc, blk, inst.make_alu(o, dst, src1, src2, sz));
+    if (l.cur.kind == TOK_INT) {
+        val imm: u64 = l.cur.ival::u64;
+        lex_next(l);
+        val ci: i32 = pool.const_intern(alloc, ?f.const_pool, imm);
+        fn.block_append(alloc, blk, inst.make_alu_imm(o, dst, src1, ci::u16, sz));
+    } or {
+        val src2: u16 = parse_reg(l);
+        fn.block_append(alloc, blk, inst.make_alu(o, dst, src1, src2, sz));
+    }
     expect_newline(l);
     ret ok[bool, str](true);
 }
