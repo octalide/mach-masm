@@ -56,18 +56,19 @@ pub fun stb_dnit(b: *Builder) {
 pub fun stb_intern(b: *Builder, s: str) u32 {
     if (b == nil) { ret 0; }
 
-    if (s == nil) {
-        s = "";
+    var si: str = s;
+    if (si == nil) {
+        si = "";
     }
 
-    val lookup: Result[*u32, str] = map.get[str, u32](?b.dedup, ?s);
+    val lookup: Result[*u32, str] = map.get[str, u32](?b.dedup, ?si);
     if (result_is_ok[*u32, str](lookup)) {
         ret @result_unwrap_ok[*u32, str](lookup);
     }
 
     val offset: u32 = b.buf.len::u32;
-    bytebuf.wbuf_write_str(?b.buf, s);
-    map.insert[str, u32](?b.dedup, s, offset);
+    bytebuf.wbuf_write_str(?b.buf, si);
+    map.insert[str, u32](?b.dedup, si, offset);
     ret offset;
 }
 
