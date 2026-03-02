@@ -351,11 +351,16 @@ fun intern_str(alloc: *allocator.Allocator, src: *u8, len: i32) str {
 fun parse_data_decl(alloc: *allocator.Allocator, l: *Lexer) Result[data.DataDecl, str] {
     lex_next(l);
 
-    if (l.cur.kind != TOK_AT_SYM) {
-        ret err[data.DataDecl, str]("expected @name in data decl");
+    var name: str = nil;
+    if (l.cur.kind == TOK_AT_SYM) {
+        name = intern_str(alloc, l.cur.start, l.cur.len);
+        lex_next(l);
+    } or (l.cur.kind == TOK_IDENT) {
+        name = intern_str(alloc, l.cur.start, l.cur.len);
+        lex_next(l);
+    } or {
+        ret err[data.DataDecl, str]("expected name in data decl");
     }
-    val name: str = intern_str(alloc, l.cur.start, l.cur.len);
-    lex_next(l);
 
     if (l.cur.kind != TOK_COLON) {
         ret err[data.DataDecl, str]("expected ':' in data decl");
@@ -450,7 +455,6 @@ fun lookup_op(l: *Lexer) u8 {
     if (tok_str_equals(?l.cur, "memset")) { ret op.OP_MEMSET; }
     if (tok_str_equals(?l.cur, "param")) { ret op.OP_PARAM; }
     if (tok_str_equals(?l.cur, "arg")) { ret op.OP_ARG; }
-    if (tok_str_equals(?l.cur, "retval")) { ret op.OP_RETVAL; }
     if (tok_str_equals(?l.cur, "scarg")) { ret op.OP_SCARG; }
     if (tok_str_equals(?l.cur, "atomic_load")) { ret op.OP_ATOMIC_LOAD; }
     if (tok_str_equals(?l.cur, "atomic_store")) { ret op.OP_ATOMIC_STORE; }
@@ -532,7 +536,7 @@ fun parse_label_ref(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function) u16
 }
 
 fun parse_target_ref(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function) u16 {
-    if (l.cur.kind == TOK_AT_SYM) {
+    if (l.cur.kind == TOK_AT_SYM || l.cur.kind == TOK_IDENT) {
         val name: str = intern_str(alloc, l.cur.start, l.cur.len);
         lex_next(l);
         val idx: i32 = pool.label_intern(alloc, ?f.labels, name);
@@ -636,7 +640,19 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
     }
 
     if (o == op.OP_RET) {
-        fn.block_append(alloc, blk, inst.make_ret());
+        if (l.cur.kind == TOK_DOT) {
+            val sz: u8 = parse_size_suffix(l);
+            val value_reg: u16 = parse_reg(l);
+            expect_comma(l);
+            var td_idx: u16 = 0;
+            if (l.cur.kind == TOK_TD) {
+                td_idx = l.cur.ival::u16;
+                lex_next(l);
+            }
+            fn.block_append(alloc, blk, inst.make_ret_value(value_reg, td_idx, sz));
+        } or {
+            fn.block_append(alloc, blk, inst.make_ret());
+        }
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -756,7 +772,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         val dst: u16 = parse_reg(l);
         expect_comma(l);
 
-        if (l.cur.kind == TOK_AT_SYM) {
+        if (l.cur.kind == TOK_AT_SYM || l.cur.kind == TOK_IDENT) {
             val lbl: u16 = parse_target_ref(alloc, l, f);
             fn.block_append(alloc, blk, inst.make_addr_label(dst, lbl, sz));
         } or {
@@ -780,7 +796,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         val result_reg: u16 = parse_reg(l);
         expect_comma(l);
 
-        if (l.cur.kind == TOK_AT_SYM) {
+        if (l.cur.kind == TOK_AT_SYM || l.cur.kind == TOK_IDENT) {
             val lbl: u16 = parse_target_ref(alloc, l, f);
             var tail: bool = false;
             if (tok_str_equals(?l.cur, "tail")) {
@@ -845,7 +861,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
     }
 
     if (o == op.OP_PARAM) {
-        val sz: u8 = parse_size_suffix(l);
+        if (l.cur.kind == TOK_DOT) { parse_size_suffix(l); }
         var param_idx: u16 = 0;
         if (l.cur.kind == TOK_PARAM) {
             param_idx = l.cur.ival::u16;
@@ -898,20 +914,6 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         expect_comma(l);
         val value_reg: u16 = parse_reg(l);
         fn.block_append(alloc, blk, inst.make_scarg(arg_idx::u8, value_reg, sz));
-        expect_newline(l);
-        ret ok[bool, str](true);
-    }
-
-    if (o == op.OP_RETVAL) {
-        val sz: u8 = parse_size_suffix(l);
-        val value_reg: u16 = parse_reg(l);
-        expect_comma(l);
-        var td_idx: u16 = 0;
-        if (l.cur.kind == TOK_TD) {
-            td_idx = l.cur.ival::u16;
-            lex_next(l);
-        }
-        fn.block_append(alloc, blk, inst.make_retval(value_reg, td_idx, sz));
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -1030,31 +1032,46 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
 fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, str] {
     lex_next(l);
 
-    if (l.cur.kind != TOK_AT_SYM) {
-        ret err[*fn.Function, str]("expected @name in function");
-    }
-    val name: str = intern_str(alloc, l.cur.start, l.cur.len);
-    lex_next(l);
-
-    if (l.cur.kind != TOK_LPAREN) {
-        ret err[*fn.Function, str]("expected '(' after function name");
-    }
-    lex_next(l);
-
-    var param_count: i32 = 0;
-    if (l.cur.kind == TOK_INT) {
-        param_count = l.cur.ival::i32;
+    var name: str = nil;
+    if (l.cur.kind == TOK_AT_SYM) {
+        name = intern_str(alloc, l.cur.start, l.cur.len);
         lex_next(l);
+    } or (l.cur.kind == TOK_IDENT) {
+        name = intern_str(alloc, l.cur.start, l.cur.len);
+        lex_next(l);
+    } or {
+        ret err[*fn.Function, str]("expected function name");
     }
-    if (tok_str_equals(?l.cur, "params")) { lex_next(l); }
-    if (l.cur.kind == TOK_RPAREN) { lex_next(l); }
+
+    # skip legacy (N params) syntax
+    if (l.cur.kind == TOK_LPAREN) {
+        lex_next(l);
+        if (l.cur.kind == TOK_INT) { lex_next(l); }
+        if (tok_str_equals(?l.cur, "params")) { lex_next(l); }
+        if (l.cur.kind == TOK_RPAREN) { lex_next(l); }
+    }
 
     var flags: u16 = 0;
+
+    # named attributes
+    for (l.cur.kind == TOK_IDENT) {
+        if (tok_str_equals(?l.cur, "variadic")) {
+            flags = flags | fn.FUNC_VARIADIC;
+            lex_next(l);
+        } or (tok_str_equals(?l.cur, "noreturn")) {
+            flags = flags | fn.FUNC_NORETURN;
+            lex_next(l);
+        } or {
+            brk;
+        }
+    }
+
+    # skip legacy flags=N syntax
     if (tok_str_equals(?l.cur, "flags")) {
         lex_next(l);
         if (l.cur.kind == TOK_EQ) { lex_next(l); }
         if (l.cur.kind == TOK_INT) {
-            flags = l.cur.ival::u16;
+            flags = flags | l.cur.ival::u16;
             lex_next(l);
         }
     }
@@ -1072,7 +1089,7 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
     }
     val f: *fn.Function = result_unwrap_ok[*fn.Function, allocator.AllocError](fr);
     @f = fn.func_init(alloc, name);
-    f.param_count = param_count;
+    f.param_count = 0;
     f.flags = flags;
 
     for (l.cur.kind != TOK_RBRACE && l.cur.kind != TOK_EOF) {
@@ -1110,6 +1127,23 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
 
     if (l.cur.kind == TOK_RBRACE) { lex_next(l); }
     skip_newlines(l);
+
+    var pcount: i32 = 0;
+    var pbi: usize = 0;
+    for (pbi < f.blocks.len) {
+        val pb: *fn.Block = f.blocks.data[pbi];
+        if (pb != nil) {
+            var pii: i32 = 0;
+            for (pii < pb.inst_count) {
+                if (pb.insts[pii].op == op.OP_PARAM) {
+                    pcount = pcount + 1;
+                }
+                pii = pii + 1;
+            }
+        }
+        pbi = pbi + 1;
+    }
+    f.param_count = pcount;
 
     ret ok[*fn.Function, str](f);
 }

@@ -65,21 +65,21 @@ pub val OP_SYSCALL: Operator = 35;
 
 # calling and parameter passing
 #
-# OP_ARG, OP_PARAM, and OP_RETVAL carry type descriptor indices in f2
+# OP_ARG, OP_PARAM, and OP_RET carry type descriptor indices in f2
 # so any ABI lowering pass can classify arguments and return values
 # into registers, stack slots, or hidden pointers without the format
 # encoding any ABI-specific metadata.
 #
-# OP_CALL:    direct:   f0=result_reg, f1=0, f2=[label] label_idx (flag=0)
-#             indirect: f0=result_reg, f1=target_reg, f2=0 (flag=1)
-#             meta.cc bit 0 = tail call
-# OP_ARG:     f0=arg_idx, f1=value_reg, f2=type_desc_idx
-# OP_PARAM:   f0=param_idx, f1=byte_size, f2=type_desc_idx
-# OP_RETVAL:  f0=value_reg, f1=0, f2=type_desc_idx
-# OP_SCARG:   f0=arg_idx, f1=value_reg, f2=0
+# OP_CALL:  direct:   f0=result_reg, f1=0, f2=[label] label_idx (flag=0)
+#           indirect: f0=result_reg, f1=target_reg, f2=0 (flag=1)
+#           meta.cc bit 0 = tail call
+# OP_ARG:   f0=arg_idx, f1=value_reg, f2=type_desc_idx
+# OP_PARAM: f0=param_idx, f1=byte_size, f2=type_desc_idx
+# OP_RET:   void: all fields zero, meta.size=0
+#           value: f0=value_reg, f1=0, f2=type_desc_idx, meta.size>0
+# OP_SCARG: f0=arg_idx, f1=value_reg, f2=0
 pub val OP_ARG:     Operator = 36;
 pub val OP_PARAM:   Operator = 37;
-pub val OP_RETVAL:  Operator = 38;
 pub val OP_SCARG:   Operator = 39;
 
 # internal (peephole/ISel only, never emitted by lowering)
@@ -174,7 +174,6 @@ pub fun op_name(op: Operator) str {
     if (op == OP_SYSCALL)      { ret "syscall"; }
     if (op == OP_ARG)          { ret "arg"; }
     if (op == OP_PARAM)        { ret "param"; }
-    if (op == OP_RETVAL)       { ret "retval"; }
     if (op == OP_SCARG)        { ret "scarg"; }
     if (op == OP_NOP)          { ret "nop"; }
     if (op == OP_MEMSET)       { ret "memset"; }
