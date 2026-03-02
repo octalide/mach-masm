@@ -1,0 +1,448 @@
+# masm.codec.encoder: binary .mo encoder
+#
+# serializes a Module into the binary .mo format. the format is
+# target-agnostic — no architecture, OS, or pointer size information
+# is stored.
+#
+# .mo layout:
+#   file header → string table → symbol table → debug file table →
+#   functions (header + pools + targets + type descs + blocks +
+#   instructions + debug locs) → data declarations
+
+use std.types.bool;
+use std.types.size;
+use std.types.result;
+use std.types.string;
+
+use allocator: std.allocator;
+use bytebuf:   std.io.bytebuf;
+use vec:       std.collections.vector;
+use mem:       std.memory;
+
+use op:      masm.op;
+use inst:    masm.inst;
+use pool:    masm.pool;
+use td:      masm.typedesc;
+use sym:     masm.symbol;
+use fn:      masm.function;
+use data:    masm.data;
+use mod:     masm.module;
+use strtab:  masm.strtab;
+use symtab:  masm.symtab;
+
+pub val MAGIC_0: u8 = 77;
+pub val MAGIC_1: u8 = 65;
+pub val MAGIC_2: u8 = 83;
+pub val MAGIC_3: u8 = 77;
+pub val FORMAT_VERSION: u16 = 1;
+
+val TARGET_UNRESOLVED: u32 = 0xFFFFFFFF;
+
+# encode: serialize a Module into a WriteBuf
+# ---
+# alloc: allocator for output buffer and temporaries
+# m:     pointer to module
+# ret:   WriteBuf containing .mo bytes, or error
+pub fun encode(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.WriteBuf, str] {
+    if (alloc == nil || m == nil) {
+        ret err[bytebuf.WriteBuf, str]("nil argument");
+    }
+
+    var stb: strtab.Builder = strtab.stb_init(alloc);
+    strtab.stb_intern(?stb, "");
+
+    intern_module_strings(?stb, m);
+
+    var st: symtab.Table = symtab.build_from_module(alloc, ?stb, m);
+
+    var buf: bytebuf.WriteBuf = bytebuf.wbuf_init(alloc);
+
+    write_header(?buf, m);
+    write_strtab(?buf, ?stb);
+    write_symtab(?buf, ?st);
+    write_debug_files(?buf, ?stb, m);
+
+    var fi: usize = 0;
+    for (fi < m.functions.len) {
+        val f: *fn.Function = m.functions.data[fi];
+        if (f != nil) {
+            encode_function(?buf, ?stb, f);
+        }
+        fi = fi + 1;
+    }
+
+    var di: usize = 0;
+    for (di < m.data_decls.decls.len) {
+        val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
+        if (result_is_ok[*data.DataDecl, str](r)) {
+            encode_data_decl(?buf, ?stb, result_unwrap_ok[*data.DataDecl, str](r));
+        }
+        di = di + 1;
+    }
+
+    strtab.stb_dnit(?stb);
+    symtab.tab_dnit(?st);
+
+    ret ok[bytebuf.WriteBuf, str](buf);
+}
+
+fun intern_module_strings(stb: *strtab.Builder, m: *mod.Module) {
+    var fi: usize = 0;
+    for (fi < m.functions.len) {
+        val f: *fn.Function = m.functions.data[fi];
+        if (f != nil) {
+            strtab.stb_intern(stb, f.name);
+            var li: i32 = 0;
+            for (li < f.labels.count) {
+                strtab.stb_intern(stb, pool.label_get(?f.labels, li));
+                li = li + 1;
+            }
+            var bi: usize = 0;
+            for (bi < f.blocks.len) {
+                val blk: *fn.Block = f.blocks.data[bi];
+                if (blk != nil) {
+                    strtab.stb_intern(stb, blk.label);
+                }
+                bi = bi + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+
+    var di: usize = 0;
+    for (di < m.data_decls.decls.len) {
+        val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
+        if (result_is_ok[*data.DataDecl, str](r)) {
+            val d: *data.DataDecl = result_unwrap_ok[*data.DataDecl, str](r);
+            strtab.stb_intern(stb, d.name);
+            if (d.src_file != nil) {
+                strtab.stb_intern(stb, d.src_file);
+            }
+            var ri: i32 = 0;
+            for (ri < d.reloc_count) {
+                strtab.stb_intern(stb, d.relocs[ri].target);
+                ri = ri + 1;
+            }
+        }
+        di = di + 1;
+    }
+
+    var dfi: usize = 0;
+    for (dfi < m.debug_files.len) {
+        if (m.debug_files.data[dfi] != nil) {
+            strtab.stb_intern(stb, m.debug_files.data[dfi]);
+        }
+        dfi = dfi + 1;
+    }
+}
+
+fun write_header(buf: *bytebuf.WriteBuf, m: *mod.Module) {
+    bytebuf.wbuf_write[u8](buf, MAGIC_0);
+    bytebuf.wbuf_write[u8](buf, MAGIC_1);
+    bytebuf.wbuf_write[u8](buf, MAGIC_2);
+    bytebuf.wbuf_write[u8](buf, MAGIC_3);
+    bytebuf.wbuf_write[u16](buf, FORMAT_VERSION);
+    bytebuf.wbuf_write[u16](buf, 0);
+    bytebuf.wbuf_write[u16](buf, m.functions.len::u16);
+    bytebuf.wbuf_write[u16](buf, m.data_decls.decls.len::u16);
+    bytebuf.wbuf_write[u16](buf, m.debug_files.len::u16);
+}
+
+fun write_strtab(buf: *bytebuf.WriteBuf, stb: *strtab.Builder) {
+    val sz: u32 = strtab.stb_size(stb);
+    bytebuf.wbuf_write[u32](buf, sz);
+    if (sz > 0) {
+        bytebuf.wbuf_write_bytes(buf, strtab.stb_data(stb), sz::usize);
+    }
+}
+
+fun write_symtab(buf: *bytebuf.WriteBuf, st: *symtab.Table) {
+    val count: u16 = symtab.tab_count(st);
+    bytebuf.wbuf_write[u16](buf, count);
+
+    var i: u16 = 0;
+    for (i < count) {
+        val e: *symtab.Entry = symtab.tab_get(st, i);
+        if (e != nil) {
+            bytebuf.wbuf_write[u32](buf, e.name_off);
+            bytebuf.wbuf_write[u16](buf, e.section);
+            bytebuf.wbuf_write[u32](buf, e.offset);
+            bytebuf.wbuf_write[u32](buf, e.size);
+            bytebuf.wbuf_write[u8](buf, e.binding);
+            bytebuf.wbuf_write[u8](buf, e.kind);
+        }
+        i = i + 1;
+    }
+}
+
+fun write_debug_files(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
+                      m: *mod.Module) {
+    var i: usize = 0;
+    for (i < m.debug_files.len) {
+        var off: u32 = 0;
+        if (m.debug_files.data[i] != nil) {
+            off = strtab.stb_intern(stb, m.debug_files.data[i]);
+        }
+        bytebuf.wbuf_write[u32](buf, off);
+        i = i + 1;
+    }
+}
+
+fun func_has_debug(f: *fn.Function) bool {
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil && blk.debug_locs != nil) {
+            var ii: i32 = 0;
+            for (ii < blk.inst_count) {
+                if (blk.debug_locs[ii].src_line != 0 ||
+                    blk.debug_locs[ii].src_file != 0) {
+                    ret true;
+                }
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    ret false;
+}
+
+fun total_inst_count(f: *fn.Function) u32 {
+    var count: u32 = 0;
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil) {
+            count = count + blk.inst_count::u32;
+        }
+        bi = bi + 1;
+    }
+    ret count;
+}
+
+fun encode_function(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
+                    f: *fn.Function) {
+    val name_off: u32 = strtab.stb_intern(stb, f.name);
+    val inst_count: u32 = total_inst_count(f);
+    val has_debug: bool = func_has_debug(f);
+
+    var flags: u16 = f.flags;
+    if (has_debug) {
+        flags = flags | fn.FUNC_HAS_DEBUG;
+    }
+
+    bytebuf.wbuf_write[u32](buf, name_off);
+    bytebuf.wbuf_write[u16](buf, f.param_count::u16);
+    bytebuf.wbuf_write[u16](buf, flags);
+    bytebuf.wbuf_write[u16](buf, f.blocks.len::u16);
+    bytebuf.wbuf_write[u32](buf, inst_count);
+    bytebuf.wbuf_write[u16](buf, f.const_pool.count::u16);
+    bytebuf.wbuf_write[u32](buf, f.data_pool.data_len::u32);
+    bytebuf.wbuf_write[u16](buf, f.labels.count::u16);
+    bytebuf.wbuf_write[u16](buf, f.type_descs.descs.len::u16);
+
+    encode_const_pool(buf, ?f.const_pool);
+    encode_data_pool(buf, ?f.data_pool);
+    encode_target_table(buf, stb, f);
+    encode_type_descs(buf, ?f.type_descs);
+    encode_block_table(buf, stb, f);
+    encode_instructions(buf, f);
+
+    if (has_debug) {
+        encode_debug_locs(buf, f);
+    }
+}
+
+fun encode_const_pool(buf: *bytebuf.WriteBuf, cp: *pool.ConstPool) {
+    var i: i32 = 0;
+    for (i < cp.count) {
+        bytebuf.wbuf_write[u64](buf, cp.values[i]);
+        i = i + 1;
+    }
+}
+
+fun encode_data_pool(buf: *bytebuf.WriteBuf, dp: *pool.DataPool) {
+    if (dp.data_len > 0 && dp.data != nil) {
+        bytebuf.wbuf_write_bytes(buf, dp.data, dp.data_len::usize);
+    }
+}
+
+fun encode_target_table(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
+                        f: *fn.Function) {
+    var label_inst_map: *u32 = nil;
+    val lcount: i32 = f.labels.count;
+
+    if (lcount > 0) {
+        val r: Result[*u32, allocator.AllocError] =
+            allocator.allocator_alloc[u32](buf.alloc, lcount::usize);
+        if (result_is_ok[*u32, allocator.AllocError](r)) {
+            label_inst_map = result_unwrap_ok[*u32, allocator.AllocError](r);
+        }
+
+        var li: i32 = 0;
+        for (li < lcount) {
+            if (label_inst_map != nil) {
+                label_inst_map[li] = TARGET_UNRESOLVED;
+            }
+            li = li + 1;
+        }
+
+        var global_idx: u32 = 0;
+        var bi: usize = 0;
+        for (bi < f.blocks.len) {
+            val blk: *fn.Block = f.blocks.data[bi];
+            if (blk != nil) {
+                var ii: i32 = 0;
+                for (ii < blk.inst_count) {
+                    if (blk.insts[ii].op == op.OP_LABEL) {
+                        val lidx: i32 = inst.label_idx(?blk.insts[ii]);
+                        if (label_inst_map != nil && lidx >= 0 && lidx < lcount) {
+                            label_inst_map[lidx] = global_idx;
+                        }
+                    }
+                    global_idx = global_idx + 1;
+                    ii = ii + 1;
+                }
+            }
+            bi = bi + 1;
+        }
+    }
+
+    var i: i32 = 0;
+    for (i < lcount) {
+        val name: str = pool.label_get(?f.labels, i);
+        val name_off: u32 = strtab.stb_intern(stb, name);
+        bytebuf.wbuf_write[u32](buf, name_off);
+
+        var idx: u32 = TARGET_UNRESOLVED;
+        if (label_inst_map != nil) {
+            idx = label_inst_map[i];
+        }
+        bytebuf.wbuf_write[u32](buf, idx);
+
+        i = i + 1;
+    }
+
+    if (label_inst_map != nil) {
+        allocator.allocator_free[u32](buf.alloc, label_inst_map, lcount::usize);
+    }
+}
+
+fun encode_type_descs(buf: *bytebuf.WriteBuf, tdt: *td.TypeDescTable) {
+    var i: usize = 0;
+    for (i < tdt.descs.len) {
+        val r: Result[*td.TypeDesc, str] = vec.get[td.TypeDesc](?tdt.descs, i);
+        if (result_is_ok[*td.TypeDesc, str](r)) {
+            val d: *td.TypeDesc = result_unwrap_ok[*td.TypeDesc, str](r);
+            bytebuf.wbuf_write[u8](buf, d.kind);
+            bytebuf.wbuf_write[u16](buf, d.total_size);
+            bytebuf.wbuf_write[u8](buf, d.align);
+            bytebuf.wbuf_write[u8](buf, d.field_count);
+
+            var fi: u8 = 0;
+            for (fi < d.field_count) {
+                bytebuf.wbuf_write[u16](buf, d.fields[fi].offset);
+                bytebuf.wbuf_write[u8](buf, d.fields[fi].kind);
+                bytebuf.wbuf_write[u8](buf, d.fields[fi].size);
+                fi = fi + 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fun encode_block_table(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
+                       f: *fn.Function) {
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil) {
+            val label_off: u32 = strtab.stb_intern(stb, blk.label);
+            bytebuf.wbuf_write[u32](buf, label_off);
+            bytebuf.wbuf_write[u32](buf, blk.inst_count::u32);
+        }
+        bi = bi + 1;
+    }
+}
+
+fun encode_instructions(buf: *bytebuf.WriteBuf, f: *fn.Function) {
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil) {
+            var ii: i32 = 0;
+            for (ii < blk.inst_count) {
+                bytebuf.wbuf_write[inst.Instruction](buf, blk.insts[ii]);
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+}
+
+fun encode_debug_locs(buf: *bytebuf.WriteBuf, f: *fn.Function) {
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil && blk.debug_locs != nil) {
+            var ii: i32 = 0;
+            for (ii < blk.inst_count) {
+                bytebuf.wbuf_write[i32](buf, blk.debug_locs[ii].src_line);
+                bytebuf.wbuf_write[u16](buf, blk.debug_locs[ii].src_file);
+                bytebuf.wbuf_write[u16](buf, blk.debug_locs[ii].pad);
+                ii = ii + 1;
+            }
+        } or {
+            if (blk != nil) {
+                var ii: i32 = 0;
+                for (ii < blk.inst_count) {
+                    bytebuf.wbuf_write[i32](buf, 0);
+                    bytebuf.wbuf_write[u16](buf, 0);
+                    bytebuf.wbuf_write[u16](buf, 0);
+                    ii = ii + 1;
+                }
+            }
+        }
+        bi = bi + 1;
+    }
+}
+
+fun encode_data_decl(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
+                     d: *data.DataDecl) {
+    val name_off: u32 = strtab.stb_intern(stb, d.name);
+    bytebuf.wbuf_write[u32](buf, name_off);
+    bytebuf.wbuf_write[u8](buf, d.section);
+    bytebuf.wbuf_write[u8](buf, d.binding);
+    bytebuf.wbuf_write[u8](buf, d.sym_type);
+    bytebuf.wbuf_write[u8](buf, d.kind);
+    bytebuf.wbuf_write[u8](buf, d.align);
+    bytebuf.wbuf_write[u8](buf, 0);
+    bytebuf.wbuf_write[u8](buf, 0);
+    bytebuf.wbuf_write[u8](buf, 0);
+    bytebuf.wbuf_write[u32](buf, d.data_len);
+    bytebuf.wbuf_write[u16](buf, d.reloc_count::u16);
+
+    var src_file_off: u32 = 0;
+    if (d.src_file != nil) {
+        src_file_off = strtab.stb_intern(stb, d.src_file);
+    }
+    bytebuf.wbuf_write[u32](buf, src_file_off);
+    bytebuf.wbuf_write[i32](buf, d.src_line);
+
+    if (d.kind == data.DATA_BYTES && d.data != nil && d.data_len > 0) {
+        bytebuf.wbuf_write_bytes(buf, d.data, d.data_len::usize);
+    }
+
+    var ri: i32 = 0;
+    for (ri < d.reloc_count) {
+        bytebuf.wbuf_write[u32](buf, d.relocs[ri].offset);
+        val target_off: u32 = strtab.stb_intern(stb, d.relocs[ri].target);
+        bytebuf.wbuf_write[u32](buf, target_off);
+        bytebuf.wbuf_write[u8](buf, d.relocs[ri].kind);
+        bytebuf.wbuf_write[u8](buf, 0);
+        bytebuf.wbuf_write[u8](buf, 0);
+        bytebuf.wbuf_write[u8](buf, 0);
+        bytebuf.wbuf_write[i64](buf, d.relocs[ri].addend);
+        ri = ri + 1;
+    }
+}

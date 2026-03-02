@@ -15,3 +15,4 @@ use masm.data;
 use masm.module;
 use masm.strtab;
 use masm.symtab;
+use masm.codec;

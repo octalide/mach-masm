@@ -1,0 +1,106 @@
+# masm.codec: serialization API for MASM modules
+#
+# provides encode/decode for binary .mo format and print/parse for
+# human-readable .masm text format. single public module — consumers
+# import masm.codec and use the top-level functions.
+
+use std.types.bool;
+use std.types.size;
+use std.types.result;
+use std.types.string;
+
+use allocator: std.allocator;
+use bytebuf:   std.io.bytebuf;
+use fs:        std.filesystem;
+
+use mod:     masm.module;
+use encoder: masm.codec.encoder;
+
+# encode: serialize a Module to binary .mo format in memory
+# ---
+# alloc: allocator for the output buffer
+# m:     pointer to module
+# ret:   WriteBuf containing the .mo bytes, or error
+pub fun encode(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.WriteBuf, str] {
+    ret encoder.encode(alloc, m);
+}
+
+# encode_file: serialize a Module to a .mo file on disk
+# ---
+# alloc: allocator for temporary buffers
+# m:     pointer to module
+# path:  output file path
+# ret:   true on success, or error
+pub fun encode_file(alloc: *allocator.Allocator, m: *mod.Module, path: str) Result[bool, str] {
+    val r: Result[bytebuf.WriteBuf, str] = encoder.encode(alloc, m);
+    if (result_is_err[bytebuf.WriteBuf, str](r)) {
+        ret err[bool, str](result_unwrap_err[bytebuf.WriteBuf, str](r));
+    }
+
+    var buf: bytebuf.WriteBuf = result_unwrap_ok[bytebuf.WriteBuf, str](r);
+
+    val fr: Result[fs.File, str] = fs.create(path, 420);
+    if (result_is_err[fs.File, str](fr)) {
+        bytebuf.wbuf_dnit(?buf);
+        ret err[bool, str](result_unwrap_err[fs.File, str](fr));
+    }
+
+    var f: fs.File = result_unwrap_ok[fs.File, str](fr);
+    val wr: Result[usize, str] = fs.file_write(?f, buf.data, buf.len);
+    fs.file_close(?f);
+    bytebuf.wbuf_dnit(?buf);
+
+    if (result_is_err[usize, str](wr)) {
+        ret err[bool, str](result_unwrap_err[usize, str](wr));
+    }
+
+    ret ok[bool, str](true);
+}
+
+# decode: deserialize a binary .mo buffer into a Module
+# ---
+# alloc: allocator for the reconstructed module
+# data:  pointer to .mo bytes
+# len:   byte length
+# ret:   reconstructed Module, or error
+pub fun decode(alloc: *allocator.Allocator, data: *u8, len: usize) Result[mod.Module, str] {
+    ret err[mod.Module, str]("not implemented");
+}
+
+# decode_file: deserialize a .mo file from disk into a Module
+# ---
+# alloc: allocator for the reconstructed module
+# path:  input file path
+# ret:   reconstructed Module, or error
+pub fun decode_file(alloc: *allocator.Allocator, path: str) Result[mod.Module, str] {
+    ret err[mod.Module, str]("not implemented");
+}
+
+# print_file: write a human-readable .masm text file from a Module
+# ---
+# alloc: allocator for temporary buffers
+# m:     pointer to module
+# path:  output file path
+# ret:   true on success, or error
+pub fun print_file(alloc: *allocator.Allocator, m: *mod.Module, path: str) Result[bool, str] {
+    ret err[bool, str]("not implemented");
+}
+
+# parse: parse human-readable .masm text into a Module
+# ---
+# alloc: allocator for the reconstructed module
+# text:  pointer to .masm text bytes
+# len:   byte length
+# ret:   reconstructed Module, or error
+pub fun parse(alloc: *allocator.Allocator, text: *u8, len: usize) Result[mod.Module, str] {
+    ret err[mod.Module, str]("not implemented");
+}
+
+# parse_file: parse a .masm text file from disk into a Module
+# ---
+# alloc: allocator for the reconstructed module
+# path:  input file path
+# ret:   reconstructed Module, or error
+pub fun parse_file(alloc: *allocator.Allocator, path: str) Result[mod.Module, str] {
+    ret err[mod.Module, str]("not implemented");
+}
