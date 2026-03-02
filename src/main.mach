@@ -1,0 +1,191 @@
+# masm CLI entry point
+#
+# provides subcommands for working with .masm text and .mo binary files:
+# compile (text to binary), print (binary to text), info (module summary),
+# and help.
+
+use std.runtime;
+use std.types.bool;
+use std.types.size;
+use std.types.result;
+use std.types.string;
+
+use alloc: std.allocator;
+use print: std.print;
+
+use fn:    masm.function;
+use mod:   masm.module;
+use codec: masm.codec;
+
+fun print_usage() {
+    print.eprintln("usage: masm <command> [options]");
+    print.eprintln("");
+    print.eprintln("commands:");
+    print.eprintln("  compile <input.masm> [-o output.mo]    parse text, encode binary");
+    print.eprintln("  print   <input.mo>   [-o output.masm]  decode binary, print text");
+    print.eprintln("  info    <input>                         show module summary");
+    print.eprintln("  help                                    print this message");
+}
+
+fun find_flag(argc: i64, argv: &&u8, flag: str) str {
+    var i: i64 = 0;
+    for (i < argc - 1) {
+        if (str_equals(argv[i], flag)) {
+            ret argv[i + 1];
+        }
+        i = i + 1;
+    }
+    ret nil;
+}
+
+fun cmd_compile(argc: i64, argv: &&u8) i64 {
+    if (argc < 3) {
+        print.eprintln("error: compile requires an input file");
+        print_usage();
+        ret 1;
+    }
+
+    val input: str = argv[2];
+    var output: str = find_flag(argc, argv, "-o");
+    if (output == nil) {
+        output = "out.mo";
+    }
+
+    var a: alloc.Allocator = alloc.default();
+
+    val pr: Result[mod.Module, str] = codec.parse_file(?a, input);
+    if (result_is_err[mod.Module, str](pr)) {
+        print.eprintlnf("error: %s", result_unwrap_err[mod.Module, str](pr));
+        ret 1;
+    }
+    var m: mod.Module = result_unwrap_ok[mod.Module, str](pr);
+
+    val er: Result[bool, str] = codec.encode_file(?a, ?m, output);
+    mod.module_dnit(?a, ?m);
+
+    if (result_is_err[bool, str](er)) {
+        print.eprintlnf("error: %s", result_unwrap_err[bool, str](er));
+        ret 1;
+    }
+
+    print.printf("compiled %s -> %s\n", input, output);
+    ret 0;
+}
+
+fun cmd_print(argc: i64, argv: &&u8) i64 {
+    if (argc < 3) {
+        print.eprintln("error: print requires an input file");
+        print_usage();
+        ret 1;
+    }
+
+    val input: str = argv[2];
+    var output: str = find_flag(argc, argv, "-o");
+    if (output == nil) {
+        output = "/dev/stdout";
+    }
+
+    var a: alloc.Allocator = alloc.default();
+
+    val dr: Result[mod.Module, str] = codec.decode_file(?a, input);
+    if (result_is_err[mod.Module, str](dr)) {
+        print.eprintlnf("error: %s", result_unwrap_err[mod.Module, str](dr));
+        ret 1;
+    }
+    var m: mod.Module = result_unwrap_ok[mod.Module, str](dr);
+
+    val pr: Result[bool, str] = codec.print_file(?a, ?m, output);
+    mod.module_dnit(?a, ?m);
+
+    if (result_is_err[bool, str](pr)) {
+        print.eprintlnf("error: %s", result_unwrap_err[bool, str](pr));
+        ret 1;
+    }
+
+    ret 0;
+}
+
+fun cmd_info(argc: i64, argv: &&u8) i64 {
+    if (argc < 3) {
+        print.eprintln("error: info requires an input file");
+        print_usage();
+        ret 1;
+    }
+
+    val input: str = argv[2];
+    var a: alloc.Allocator = alloc.default();
+
+    val dr: Result[mod.Module, str] = codec.decode_file(?a, input);
+    var m: mod.Module;
+    var from_binary: bool = true;
+
+    if (result_is_err[mod.Module, str](dr)) {
+        val pr: Result[mod.Module, str] = codec.parse_file(?a, input);
+        if (result_is_err[mod.Module, str](pr)) {
+            print.eprintlnf("error: %s", result_unwrap_err[mod.Module, str](pr));
+            ret 1;
+        }
+        m = result_unwrap_ok[mod.Module, str](pr);
+        from_binary = false;
+    } or {
+        m = result_unwrap_ok[mod.Module, str](dr);
+    }
+
+    if (from_binary) {
+        print.printf("format: binary (.mo)\n");
+    } or {
+        print.printf("format: text (.masm)\n");
+    }
+
+    print.printf("functions:  %u\n", m.functions.len);
+    print.printf("data decls: %u\n", m.data_decls.decls.len);
+
+    var fi: usize = 0;
+    for (fi < m.functions.len) {
+        val f: *fn.Function = m.functions.data[fi];
+        if (f == nil) {
+            fi = fi + 1;
+            cnt;
+        }
+
+        var total_insts: i32 = 0;
+        var bi: usize = 0;
+        for (bi < f.blocks.len) {
+            if (f.blocks.data[bi] != nil) {
+                total_insts = total_insts + f.blocks.data[bi].inst_count;
+            }
+            bi = bi + 1;
+        }
+
+        print.printf("  fn %s: %d blocks, %d instructions\n",
+            f.name, f.blocks.len::i32, total_insts);
+        fi = fi + 1;
+    }
+
+    mod.module_dnit(?a, ?m);
+    ret 0;
+}
+
+fun cmd_help(argc: i64, argv: &&u8) i64 {
+    print_usage();
+    ret 0;
+}
+
+$main.symbol = "main";
+fun main(argc: i64, argv: &&u8) i64 {
+    if (argc < 2) {
+        print_usage();
+        ret 1;
+    }
+
+    val command: str = argv[1];
+
+    if (str_equals(command, "compile")) { ret cmd_compile(argc, argv); }
+    if (str_equals(command, "print"))   { ret cmd_print(argc, argv); }
+    if (str_equals(command, "info"))    { ret cmd_info(argc, argv); }
+    if (str_equals(command, "help"))    { ret cmd_help(argc, argv); }
+
+    print.eprintlnf("error: unknown command '%s'", command);
+    print_usage();
+    ret 1;
+}

@@ -125,3 +125,53 @@ pub fun str_get(r: *Reader, offset: u32) str {
     if (r == nil || r.data == nil || offset >= r.len) { ret nil; }
     ret (?r.data[offset])::str;
 }
+
+test "strtab: intern returns offset for first string" {
+    var a: allocator.Allocator = allocator.default();
+    var b: Builder = stb_init(?a);
+    val off: u32 = stb_intern(?b, "hello");
+    stb_dnit(?b);
+    if (off == 0) { ret 1; }
+    ret 0;
+}
+
+test "strtab: intern deduplicates same string" {
+    var a: allocator.Allocator = allocator.default();
+    var b: Builder = stb_init(?a);
+    val o1: u32 = stb_intern(?b, "test");
+    val o2: u32 = stb_intern(?b, "test");
+    stb_dnit(?b);
+    if (o1 == o2) { ret 1; }
+    ret 0;
+}
+
+test "strtab: reader retrieves interned string" {
+    var a: allocator.Allocator = allocator.default();
+    var b: Builder = stb_init(?a);
+    val off: u32 = stb_intern(?b, "world");
+    val data: *u8 = stb_data(?b);
+    val size: u32 = stb_size(?b);
+    var r: Reader = str_init(data, size);
+    val s: str = str_get(?r, off);
+    val eq: bool = str_equals(s, "world");
+    stb_dnit(?b);
+    if (eq) { ret 1; }
+    ret 0;
+}
+
+test "strtab: multiple strings have distinct offsets" {
+    var a: allocator.Allocator = allocator.default();
+    var b: Builder = stb_init(?a);
+    val o1: u32 = stb_intern(?b, "alpha");
+    val o2: u32 = stb_intern(?b, "beta");
+    val data: *u8 = stb_data(?b);
+    val size: u32 = stb_size(?b);
+    var r: Reader = str_init(data, size);
+    val s1: str = str_get(?r, o1);
+    val s2: str = str_get(?r, o2);
+    val eq1: bool = str_equals(s1, "alpha");
+    val eq2: bool = str_equals(s2, "beta");
+    stb_dnit(?b);
+    if (o1 != o2 && eq1 && eq2) { ret 1; }
+    ret 0;
+}
