@@ -167,6 +167,20 @@ pub fun make_alu(o: u8, dst: u16, src1: u16, src2: u16, size: u8) Instruction {
     ret mk(o, make_meta(0, size, 0), dst, src1, src2);
 }
 
+# make_alu_imm: three-operand with immediate (f0=dst, f1=src1, f2=[const] imm)
+#
+# flag=1 marks f2 as a const pool index instead of a register.
+# ---
+# o:         opcode
+# dst:       destination register
+# src1:      first source register
+# const_idx: const pool index holding the immediate value
+# size:      operation size in bytes
+# ret:       constructed instruction
+pub fun make_alu_imm(o: u8, dst: u16, src1: u16, const_idx: u16, size: u8) Instruction {
+    ret mk(o, make_meta(0, size, 1), dst, src1, const_idx);
+}
+
 # make_cmp: comparison (f0=dst, f1=src1, f2=src2, cc=condition)
 #
 # dst receives 1 if the condition holds, 0 otherwise. covers OP_ICMP

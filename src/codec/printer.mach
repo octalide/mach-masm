@@ -397,7 +397,12 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
     write_str(buf, ", ");
     write_reg(buf, i.f1);
     write_str(buf, ", ");
-    write_reg(buf, i.f2);
+    if (inst.flag(i) == 1) {
+        val v: u64 = pool.const_get(?f.const_pool, i.f2::i32);
+        write_u64(buf, v);
+    } or {
+        write_reg(buf, i.f2);
+    }
     write_str(buf, "\n");
 }
 
