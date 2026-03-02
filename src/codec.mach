@@ -15,6 +15,7 @@ use fs:        std.filesystem;
 
 use mod:     masm.module;
 use encoder: masm.codec.encoder;
+use decoder: masm.codec.decoder;
 use printer: masm.codec.printer;
 
 # encode: serialize a Module to binary .mo format in memory
@@ -65,7 +66,7 @@ pub fun encode_file(alloc: *allocator.Allocator, m: *mod.Module, path: str) Resu
 # len:   byte length
 # ret:   reconstructed Module, or error
 pub fun decode(alloc: *allocator.Allocator, data: *u8, len: usize) Result[mod.Module, str] {
-    ret err[mod.Module, str]("not implemented");
+    ret decoder.decode(alloc, data, len);
 }
 
 # decode_file: deserialize a .mo file from disk into a Module
@@ -74,7 +75,38 @@ pub fun decode(alloc: *allocator.Allocator, data: *u8, len: usize) Result[mod.Mo
 # path:  input file path
 # ret:   reconstructed Module, or error
 pub fun decode_file(alloc: *allocator.Allocator, path: str) Result[mod.Module, str] {
-    ret err[mod.Module, str]("not implemented");
+    val fr: Result[fs.File, str] = fs.open(path);
+    if (result_is_err[fs.File, str](fr)) {
+        ret err[mod.Module, str](result_unwrap_err[fs.File, str](fr));
+    }
+    var f: fs.File = result_unwrap_ok[fs.File, str](fr);
+
+    val sr: Result[fs.Stat, str] = fs.file_stat(?f);
+    if (result_is_err[fs.Stat, str](sr)) {
+        fs.file_close(?f);
+        ret err[mod.Module, str](result_unwrap_err[fs.Stat, str](sr));
+    }
+    val st: fs.Stat = result_unwrap_ok[fs.Stat, str](sr);
+    val size: usize = st.st_size::usize;
+
+    val ar: Result[*u8, allocator.AllocError] =
+        allocator.allocator_alloc[u8](alloc, size);
+    if (result_is_err[*u8, allocator.AllocError](ar)) {
+        fs.file_close(?f);
+        ret err[mod.Module, str]("alloc failed");
+    }
+    val buf: *u8 = result_unwrap_ok[*u8, allocator.AllocError](ar);
+
+    val rr: Result[usize, str] = fs.file_read(?f, buf, size);
+    fs.file_close(?f);
+    if (result_is_err[usize, str](rr)) {
+        allocator.allocator_free[u8](alloc, buf, size);
+        ret err[mod.Module, str](result_unwrap_err[usize, str](rr));
+    }
+
+    val result: Result[mod.Module, str] = decoder.decode(alloc, buf, size);
+    allocator.allocator_free[u8](alloc, buf, size);
+    ret result;
 }
 
 # print_file: write a human-readable .masm text file from a Module
