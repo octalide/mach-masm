@@ -120,9 +120,11 @@ fun cmd_info(argc: i64, argv: &&u8) i64 {
     var from_binary: bool = true;
 
     if (result_is_err[mod.Module, str](dr)) {
+        val decode_err: str = result_unwrap_err[mod.Module, str](dr);
         val pr: Result[mod.Module, str] = codec.parse_file(?a, input);
         if (result_is_err[mod.Module, str](pr)) {
-            print.eprintlnf("error: %s", result_unwrap_err[mod.Module, str](pr));
+            print.eprintlnf("error (binary): %s", decode_err);
+            print.eprintlnf("error (text):   %s", result_unwrap_err[mod.Module, str](pr));
             ret 1;
         }
         m = result_unwrap_ok[mod.Module, str](pr);

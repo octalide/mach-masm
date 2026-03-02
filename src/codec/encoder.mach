@@ -429,8 +429,16 @@ fun encode_data_decl(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
     bytebuf.wbuf_write[u32](buf, src_file_off);
     bytebuf.wbuf_write[i32](buf, d.src_line);
 
-    if (d.kind == data.DATA_BYTES && d.data != nil && d.data_len > 0) {
-        bytebuf.wbuf_write_bytes(buf, d.data, d.data_len::usize);
+    if (d.kind == data.DATA_BYTES && d.data_len > 0) {
+        if (d.data != nil) {
+            bytebuf.wbuf_write_bytes(buf, d.data, d.data_len::usize);
+        } or {
+            var zi: u32 = 0;
+            for (zi < d.data_len) {
+                bytebuf.wbuf_write[u8](buf, 0);
+                zi = zi + 1;
+            }
+        }
     }
 
     var ri: i32 = 0;
