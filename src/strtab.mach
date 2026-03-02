@@ -1,0 +1,127 @@
+# masm.strtab: string table builder and reader
+#
+# packed null-terminated strings referenced by u32 byte offset.
+# deduplicates on intern. used by the binary .mo encoder/decoder.
+
+use std.types.bool;
+use std.types.size;
+use std.types.result;
+use std.types.string;
+
+use allocator: std.allocator;
+use bytebuf:   std.io.bytebuf;
+use map:       std.collections.map;
+
+# Builder: string table builder for encoding
+#
+# interns strings into a packed byte buffer with null terminators.
+# deduplicates via hash map so the same string always returns the
+# same byte offset.
+# ---
+# buf:   backing write buffer
+# dedup: hash map for O(1) deduplication (string → byte offset)
+pub rec Builder {
+    buf:   bytebuf.WriteBuf;
+    dedup: map.Map[str, u32];
+}
+
+# stb_init: create an empty string table builder
+# ---
+# alloc: allocator for buffer and map
+# ret:   initialized builder
+pub fun stb_init(alloc: *allocator.Allocator) Builder {
+    var b: Builder;
+    b.buf = bytebuf.wbuf_init(alloc);
+    b.dedup = map.init[str, u32](alloc, map.hash_str, map.eq_str);
+    ret b;
+}
+
+# stb_dnit: free all memory owned by a builder
+# ---
+# b: pointer to builder
+pub fun stb_dnit(b: *Builder) {
+    if (b == nil) { ret; }
+    bytebuf.wbuf_dnit(?b.buf);
+    map.dnit[str, u32](?b.dedup);
+}
+
+# stb_intern: intern a string, returning its byte offset
+#
+# deduplicates: returns the existing offset if the string was
+# already interned. the string is stored null-terminated.
+# ---
+# b: pointer to builder
+# s: string to intern
+# ret:  byte offset (u32) into the string table
+pub fun stb_intern(b: *Builder, s: str) u32 {
+    if (b == nil) { ret 0; }
+
+    if (s == nil) {
+        s = "";
+    }
+
+    val lookup: Result[*u32, str] = map.get[str, u32](?b.dedup, ?s);
+    if (result_is_ok[*u32, str](lookup)) {
+        ret @result_unwrap_ok[*u32, str](lookup);
+    }
+
+    val offset: u32 = b.buf.len::u32;
+    bytebuf.wbuf_write_str(?b.buf, s);
+    map.insert[str, u32](?b.dedup, s, offset);
+    ret offset;
+}
+
+# stb_size: current size of the string table in bytes
+# ---
+# b: pointer to builder
+# ret:  size in bytes
+pub fun stb_size(b: *Builder) u32 {
+    if (b == nil) { ret 0; }
+    ret b.buf.len::u32;
+}
+
+# stb_data: pointer to the string table data
+# ---
+# b: pointer to builder
+# ret:  pointer to the packed byte data
+pub fun stb_data(b: *Builder) *u8 {
+    if (b == nil) { ret nil; }
+    ret b.buf.data;
+}
+
+# Reader: string table reader for decoding
+#
+# wraps a raw byte region and provides O(1) lookup by byte offset.
+# strings are null-terminated in the table.
+# ---
+# data: pointer to the string table bytes
+# len:  total size of the table in bytes
+pub rec Reader {
+    data: *u8;
+    len:  u32;
+}
+
+# str_init: create a string table reader
+# ---
+# data: pointer to packed string table bytes
+# len:  total size in bytes
+# ret:  initialized reader
+pub fun str_init(data: *u8, len: u32) Reader {
+    var r: Reader;
+    r.data = data;
+    r.len = len;
+    ret r;
+}
+
+# str_get: retrieve a string by byte offset
+#
+# returns a pointer into the table data. O(1) — just pointer
+# arithmetic, no copying.
+# ---
+# r:      pointer to reader
+# offset: byte offset into the table
+# ret:    null-terminated string, or nil if out of bounds
+pub fun str_get(r: *Reader, offset: u32) str {
+    if (r == nil || r.data == nil || offset >= r.len) { ret nil; }
+    ret (?r.data[offset])::str;
+}
