@@ -2,8 +2,10 @@
 #
 # provides ConstPool (64-bit program constants), DataPool (width-agnostic
 # byte pool for instruction metadata), and LabelTable (label name interning).
-# all pools use index-based lookup. instruction fields reference pool entries
-# by u16 index. pools own their backing memory and grow geometrically.
+# ConstPool and LabelTable use index-based lookup. DataPool uses byte-offset
+# addressing: data_intern returns a byte offset into the backing buffer and
+# data_get resolves it directly. pools own their backing memory and grow
+# geometrically.
 
 use std.types.bool;
 use std.types.size;
@@ -213,11 +215,14 @@ pub fun label_dnit(alloc: *allocator.Allocator, tbl: *LabelTable) {
 # stores variable-width binary data referenced by instruction f2 fields:
 # displacements (i32), packed indexed memory operands, and other
 # metadata. entries are 8-byte aligned so typed reads via pointer
-# cast are safe. deduplicates on intern via FNV-1a hash.
+# cast are safe. data_intern returns byte offsets into the backing
+# buffer; data_get resolves them directly without indirection.
+# deduplicates on intern via FNV-1a hash. offsets/sizes arrays are
+# internal bookkeeping for dedup verification.
 # ---
 # data:     backing byte buffer
-# offsets:  per-entry byte offset within data
-# sizes:    per-entry byte count
+# offsets:  per-entry byte offset within data (internal, for dedup)
+# sizes:    per-entry byte count (internal, for dedup)
 # count:    number of interned entries
 # cap:      allocated entry capacity (offsets/sizes arrays)
 # data_len: used bytes in data buffer
@@ -287,7 +292,7 @@ fun bytes_equal(a: *u8, b: *u8, len: i32) bool {
     ret true;
 }
 
-# data_intern: intern arbitrary bytes into the pool, returning a deduped index
+# data_intern: intern arbitrary bytes into the pool, returning a byte offset
 #
 # entries are 8-byte aligned in the backing buffer. deduplication uses
 # FNV-1a hashing with byte-level equality verification on collision.
@@ -296,7 +301,7 @@ fun bytes_equal(a: *u8, b: *u8, len: i32) bool {
 # pool:  pointer to pool
 # ptr:   pointer to bytes to intern
 # size:  number of bytes
-# ret:   pool index (>= 0), or -1 on failure
+# ret:   byte offset into pool.data (>= 0), or -1 on failure
 pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size: i32) i32 {
     if (alloc == nil || pool == nil || ptr == nil || size <= 0) {
         dbg.eprintln("[masm] data_intern: nil argument or invalid size");
@@ -310,7 +315,7 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
         if (candidate >= 0 && candidate < pool.count &&
             pool.sizes[candidate] == size &&
             bytes_equal(?pool.data[pool.offsets[candidate]], ptr, size)) {
-            ret candidate;
+            ret pool.offsets[candidate];
         }
     }
 
@@ -369,17 +374,17 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
     pool.count = pool.count + 1;
     pool.data_len = needed;
     map.insert[u64, i32](?pool.dedup, h, idx);
-    ret idx;
+    ret aligned;
 }
 
-# data_get: retrieve a pointer to interned bytes by index
+# data_get: retrieve a pointer to interned bytes by byte offset
 # ---
-# pool: pointer to pool
-# idx:  pool index
-# ret:  pointer to the interned bytes, or nil if out of bounds
-pub fun data_get(pool: *DataPool, idx: i32) *u8 {
-    if (pool == nil || idx < 0 || idx >= pool.count) { ret nil; }
-    ret ?pool.data[pool.offsets[idx]];
+# pool:   pointer to pool
+# offset: byte offset into the data buffer
+# ret:    pointer to the interned bytes, or nil if out of bounds
+pub fun data_get(pool: *DataPool, offset: i32) *u8 {
+    if (pool == nil || offset < 0 || offset >= pool.data_len) { ret nil; }
+    ret ?pool.data[offset];
 }
 
 # data_intern_i32: convenience wrapper to intern a single i32 value
@@ -387,7 +392,7 @@ pub fun data_get(pool: *DataPool, idx: i32) *u8 {
 # alloc: allocator for buffer growth
 # pool:  pointer to pool
 # value: i32 value to intern
-# ret:   pool index (>= 0), or -1 on failure
+# ret:   byte offset into pool.data (>= 0), or -1 on failure
 pub fun data_intern_i32(alloc: *allocator.Allocator, pool: *DataPool, value: i32) i32 {
     var v: i32 = value;
     ret data_intern(alloc, pool, (?v)::*u8, 4);
@@ -395,11 +400,11 @@ pub fun data_intern_i32(alloc: *allocator.Allocator, pool: *DataPool, value: i32
 
 # data_get_i32: convenience wrapper to read an interned i32 value
 # ---
-# pool: pointer to pool
-# idx:  pool index
-# ret:  the i32 value, or 0 if out of bounds
-pub fun data_get_i32(pool: *DataPool, idx: i32) i32 {
-    val ptr: *u8 = data_get(pool, idx);
+# pool:   pointer to pool
+# offset: byte offset into the data buffer
+# ret:    the i32 value, or 0 if out of bounds
+pub fun data_get_i32(pool: *DataPool, offset: i32) i32 {
+    val ptr: *u8 = data_get(pool, offset);
     if (ptr == nil) { ret 0; }
     ret @(ptr::*i32);
 }
