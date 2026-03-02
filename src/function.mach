@@ -75,8 +75,9 @@ pub rec Function {
     type_descs:  typedesc.TypeDescTable;
 }
 
-pub val FUNC_VARIADIC: u16 = 1;
-pub val FUNC_NORETURN: u16 = 2;
+pub val FUNC_VARIADIC:  u16 = 1;
+pub val FUNC_NORETURN:  u16 = 2;
+pub val FUNC_HAS_DEBUG: u16 = 4;
 
 # block_init: create an empty block with the given label
 # ---

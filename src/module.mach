@@ -21,16 +21,10 @@ use data:      masm.data;
 # functions:   vector of function pointers
 # data_decls:  module-level data declarations
 # debug_files: source file path table for debug info
-# target_arch: target architecture name
-# target_os:   target operating system name
-# ptr_size:    pointer width in bytes
 pub rec Module {
     functions:   vec.Vector[*fn.Function];
     data_decls:  data.DataDeclList;
     debug_files: vec.Vector[str];
-    target_arch: str;
-    target_os:   str;
-    ptr_size:    u8;
 }
 
 # ModuleBuilder: mutable construction API for building a Module
@@ -43,17 +37,11 @@ pub rec Module {
 # functions:   function pointer vector
 # data_decls:  data declaration list
 # debug_files: debug file path vector
-# target_arch: target architecture name
-# target_os:   target operating system name
-# ptr_size:    pointer width in bytes
 pub rec ModuleBuilder {
     alloc:       *allocator.Allocator;
     functions:   vec.Vector[*fn.Function];
     data_decls:  data.DataDeclList;
     debug_files: vec.Vector[str];
-    target_arch: str;
-    target_os:   str;
-    ptr_size:    u8;
 }
 
 # builder_init: create a new empty module builder
@@ -66,9 +54,6 @@ pub fun builder_init(alloc: *allocator.Allocator) ModuleBuilder {
     b.functions = vec.init[*fn.Function](alloc);
     b.data_decls = data.list_init(alloc);
     b.debug_files = vec.init[str](alloc);
-    b.target_arch = nil;
-    b.target_os = nil;
-    b.ptr_size = 0;
     ret b;
 }
 
@@ -133,9 +118,6 @@ pub fun build(b: *ModuleBuilder) Module {
     m.functions = b.functions;
     m.data_decls = b.data_decls;
     m.debug_files = b.debug_files;
-    m.target_arch = b.target_arch;
-    m.target_os = b.target_os;
-    m.ptr_size = b.ptr_size;
 
     b.functions = vec.init[*fn.Function](b.alloc);
     b.data_decls = data.list_init(b.alloc);
