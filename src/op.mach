@@ -6,6 +6,7 @@
 # human-readable name functions.
 
 use std.types.bool;
+use std.types.string;
 
 pub def Operator: u8;
 pub def Cond:     u8;
