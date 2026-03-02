@@ -244,10 +244,10 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
 
     if (o == op.OP_BRCOND) {
         write_str(buf, "brcond");
-        val ccode: u8 = inst.cc(i);
-        if (ccode != op.CC_NONE) {
+        val cc: u8 = inst.cc(i);
+        if (cc != op.CC_NONE) {
             write_str(buf, ".");
-            write_str(buf, op.cc_name(ccode));
+            write_str(buf, op.cc_name(cc));
         }
         write_str(buf, " ");
         write_reg(buf, i.f0);
@@ -413,13 +413,13 @@ fun print_mov(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
     write_reg(buf, i.f0);
     write_str(buf, ", ");
 
-    val ccode: u8 = inst.cc(i);
+    val cc: u8 = inst.cc(i);
     val fl: u8 = inst.flag(i);
 
-    if (ccode == 1 && fl == 0) {
+    if (cc == 1 && fl == 0) {
         val v: i32 = pool.data_get_i32(?f.data_pool, i.f2::i32);
         write_i32(buf, v);
-    } or (ccode == 0 && fl == 1) {
+    } or (cc == 0 && fl == 1) {
         val v: u64 = pool.const_get(?f.const_pool, i.f2::i32);
         write_u64(buf, v);
     } or {
@@ -470,9 +470,9 @@ fun print_addr(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
     write_reg(buf, i.f0);
     write_str(buf, ", ");
 
-    val ccode: u8 = inst.cc(i);
+    val cc: u8 = inst.cc(i);
 
-    if (ccode == 1 && inst.flag(i) == 0) {
+    if (cc == 1 && inst.flag(i) == 0) {
         write_target_label(buf, f, i.f2::i32);
     } or (inst.flag(i) == 1) {
         write_str(buf, "[");
@@ -497,8 +497,8 @@ fun print_indexed_mem(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruct
     write_str(buf, " + ");
     write_reg(buf, idx_reg);
 
-    val ccode: u8 = inst.cc(i);
-    val scale: i32 = 1 << (ccode::i32 & 3);
+    val cc: u8 = inst.cc(i);
+    val scale: i32 = 1 << (cc::i32 & 3);
     if (scale > 1) {
         write_str(buf, "*");
         write_i32(buf, scale);
