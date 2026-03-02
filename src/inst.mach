@@ -519,3 +519,87 @@ pub fun make_atomic_rmw(result: u16, base: u16, packed_off: u16, size: u8, order
 pub fun is_vreg(reg: i32) bool {
     ret reg >= VREG_START;
 }
+
+test "inst: encode_size and decode_size round-trip" {
+    if (decode_size(encode_size(1)) != 1) { ret 0; }
+    if (decode_size(encode_size(2)) != 2) { ret 0; }
+    if (decode_size(encode_size(4)) != 4) { ret 0; }
+    if (decode_size(encode_size(8)) != 8) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_meta packs cc, size, flag correctly" {
+    val m: u8 = make_meta(5, 4, 1);
+    var i: Instruction;
+    i.meta = m;
+    if (cc(?i) != 5) { ret 0; }
+    if (size(?i) != 4) { ret 0; }
+    if (flag(?i) != 1) { ret 0; }
+    ret 1;
+}
+
+test "inst: flag bit isolation" {
+    val m0: u8 = make_meta(0, 8, 0);
+    val m1: u8 = make_meta(0, 8, 1);
+    var i0: Instruction;
+    var i1: Instruction;
+    i0.meta = m0;
+    i1.meta = m1;
+    if (flag(?i0) != 0) { ret 0; }
+    if (flag(?i1) != 1) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_alu field layout" {
+    val i: Instruction = make_alu(op.OP_ADD, 10, 20, 30, 8);
+    if (i.op != op.OP_ADD) { ret 0; }
+    if (dst_reg(?i) != 10) { ret 0; }
+    if (src1_reg(?i) != 20) { ret 0; }
+    if (src2_reg(?i) != 30) { ret 0; }
+    if (size(?i) != 8) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_cmp carries condition code" {
+    val i: Instruction = make_cmp(op.OP_ICMP, 1, 2, 3, op.CC_EQ, 4);
+    if (i.op != op.OP_ICMP) { ret 0; }
+    if (cc(?i) != op.CC_EQ) { ret 0; }
+    if (size(?i) != 4) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_jmp and make_label use f2 as label index" {
+    val j: Instruction = make_jmp(7);
+    val l: Instruction = make_label(7);
+    if (j.op != op.OP_JMP) { ret 0; }
+    if (label_idx(?j) != 7) { ret 0; }
+    if (l.op != op.OP_LABEL) { ret 0; }
+    if (label_idx(?l) != 7) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_ret produces zero fields" {
+    val i: Instruction = make_ret();
+    if (i.op != op.OP_RET) { ret 0; }
+    if (i.f0 != 0) { ret 0; }
+    if (i.f1 != 0) { ret 0; }
+    if (i.f2 != 0) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_call_direct with tail flag" {
+    val i: Instruction = make_call_direct(5, 3, true, 8);
+    if (i.op != op.OP_CALL) { ret 0; }
+    if (dst_reg(?i) != 5) { ret 0; }
+    if (cc(?i) != op.CALL_TAIL) { ret 0; }
+    if (flag(?i) != 0) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_call_indirect sets flag bit" {
+    val i: Instruction = make_call_indirect(5, 10, false, 8);
+    if (i.op != op.OP_CALL) { ret 0; }
+    if (flag(?i) != 1) { ret 0; }
+    if (src1_reg(?i) != 10) { ret 0; }
+    ret 1;
+}
