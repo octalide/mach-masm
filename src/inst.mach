@@ -368,11 +368,24 @@ pub fun make_call_indirect(result_reg: u16, target_reg: u16, tail: bool, size: u
     ret mk(op.OP_CALL, make_meta(cc, size, 1), result_reg, target_reg, 0);
 }
 
-# make_ret: return from function
+# make_ret: void return from function
 # ---
 # ret: constructed instruction
 pub fun make_ret() Instruction {
     ret mk(op.OP_RET, 0, 0, 0, 0);
+}
+
+# make_ret_value: return a value from function
+#
+# the type descriptor index references the TypeDescTable so the ABI
+# lowering pass can classify this return value.
+# ---
+# value_reg:     register holding the return value
+# type_desc_idx: type descriptor table index
+# size:          return value size in bytes
+# ret:           constructed instruction
+pub fun make_ret_value(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
+    ret mk(op.OP_RET, make_meta(0, size, 0), value_reg, 0, type_desc_idx);
 }
 
 # make_label: label definition pseudo-instruction
@@ -435,18 +448,6 @@ pub fun make_scarg(arg_idx: u8, value_reg: u16, size: u8) Instruction {
     ret mk(op.OP_SCARG, make_meta(0, size, 0), arg_idx::u16, value_reg, 0);
 }
 
-# make_retval: produce a return value
-#
-# the type descriptor index references the TypeDescTable so the ABI
-# lowering pass can classify this return value.
-# ---
-# value_reg:     register holding the return value
-# type_desc_idx: type descriptor table index
-# size:          return value size in bytes
-# ret:           constructed instruction
-pub fun make_retval(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
-    ret mk(op.OP_RETVAL, make_meta(0, size, 0), value_reg, 0, type_desc_idx);
-}
 
 # make_atomic_load: atomic load from memory at base+displacement
 # ---
@@ -584,6 +585,16 @@ test "inst: make_ret produces zero fields" {
     if (i.f0 != 0) { ret 0; }
     if (i.f1 != 0) { ret 0; }
     if (i.f2 != 0) { ret 0; }
+    if (size(?i) != 1) { ret 0; }
+    ret 1;
+}
+
+test "inst: make_ret_value carries register and type descriptor" {
+    val i: Instruction = make_ret_value(10, 3, 8);
+    if (i.op != op.OP_RET) { ret 0; }
+    if (dst_reg(?i) != 10) { ret 0; }
+    if (i.f2 != 3) { ret 0; }
+    if (size(?i) != 8) { ret 0; }
     ret 1;
 }
 

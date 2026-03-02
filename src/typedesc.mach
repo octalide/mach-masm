@@ -1,7 +1,7 @@
 # masm.typedesc: type descriptors for ABI classification
 #
 # carries enough type information for any calling convention to classify
-# arguments and return values correctly. OP_ARG, OP_PARAM, and OP_RETVAL
+# arguments and return values correctly. OP_ARG, OP_PARAM, and OP_RET
 # instructions reference entries in the TypeDescTable by u16 index through
 # their f2 field. this gives any ABI lowering pass the type information it
 # needs without encoding ABI-specific metadata into the instruction format.
