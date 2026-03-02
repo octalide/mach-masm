@@ -15,6 +15,7 @@ use fs:        std.filesystem;
 
 use mod:     masm.module;
 use encoder: masm.codec.encoder;
+use printer: masm.codec.printer;
 
 # encode: serialize a Module to binary .mo format in memory
 # ---
@@ -83,7 +84,29 @@ pub fun decode_file(alloc: *allocator.Allocator, path: str) Result[mod.Module, s
 # path:  output file path
 # ret:   true on success, or error
 pub fun print_file(alloc: *allocator.Allocator, m: *mod.Module, path: str) Result[bool, str] {
-    ret err[bool, str]("not implemented");
+    val r: Result[bytebuf.WriteBuf, str] = printer.print(alloc, m);
+    if (result_is_err[bytebuf.WriteBuf, str](r)) {
+        ret err[bool, str](result_unwrap_err[bytebuf.WriteBuf, str](r));
+    }
+
+    var buf: bytebuf.WriteBuf = result_unwrap_ok[bytebuf.WriteBuf, str](r);
+
+    val fr: Result[fs.File, str] = fs.create(path, 420);
+    if (result_is_err[fs.File, str](fr)) {
+        bytebuf.wbuf_dnit(?buf);
+        ret err[bool, str](result_unwrap_err[fs.File, str](fr));
+    }
+
+    var f: fs.File = result_unwrap_ok[fs.File, str](fr);
+    val wr: Result[usize, str] = fs.file_write(?f, buf.data, buf.len);
+    fs.file_close(?f);
+    bytebuf.wbuf_dnit(?buf);
+
+    if (result_is_err[usize, str](wr)) {
+        ret err[bool, str](result_unwrap_err[usize, str](wr));
+    }
+
+    ret ok[bool, str](true);
 }
 
 # parse: parse human-readable .masm text into a Module

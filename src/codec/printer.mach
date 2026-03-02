@@ -1,0 +1,611 @@
+# masm.codec.printer: human-readable .masm text printer
+#
+# serializes a Module into human-readable assembly text. each function
+# and data declaration is printed in a format that can be parsed back
+# by the text parser.
+
+use std.types.bool;
+use std.types.size;
+use std.types.result;
+use std.types.string;
+
+use allocator: std.allocator;
+use bytebuf:   std.io.bytebuf;
+use vec:       std.collections.vector;
+
+use op:   masm.op;
+use inst: masm.inst;
+use pool: masm.pool;
+use td:   masm.typedesc;
+use sym:  masm.symbol;
+use fn:   masm.function;
+use data: masm.data;
+use mod:  masm.module;
+
+# print: serialize a Module to human-readable .masm text
+# ---
+# alloc: allocator for the output buffer
+# m:     pointer to module
+# ret:   WriteBuf containing the .masm text, or error
+pub fun print(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.WriteBuf, str] {
+    if (alloc == nil || m == nil) {
+        ret err[bytebuf.WriteBuf, str]("nil argument");
+    }
+
+    var buf: bytebuf.WriteBuf = bytebuf.wbuf_init(alloc);
+
+    var di: usize = 0;
+    for (di < m.data_decls.decls.len) {
+        val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
+        if (result_is_ok[*data.DataDecl, str](r)) {
+            print_data_decl(?buf, result_unwrap_ok[*data.DataDecl, str](r));
+        }
+        di = di + 1;
+    }
+
+    var fi: usize = 0;
+    for (fi < m.functions.len) {
+        val f: *fn.Function = m.functions.data[fi];
+        if (f != nil) {
+            if (di > 0 || fi > 0) {
+                write_str(?buf, "\n");
+            }
+            print_function(?buf, f);
+        }
+        fi = fi + 1;
+    }
+
+    ret ok[bytebuf.WriteBuf, str](buf);
+}
+
+fun write_str(buf: *bytebuf.WriteBuf, s: str) {
+    if (s == nil) { ret; }
+    bytebuf.wbuf_write_bytes(buf, s::*u8, str_len(s));
+}
+
+fun write_u64(buf: *bytebuf.WriteBuf, n: u64) {
+    var tmp: [20]u8;
+    var idx: i32 = 20;
+    var x: u64 = n;
+
+    if (x == 0) {
+        idx = idx - 1;
+        tmp[idx] = 48;
+    } or {
+        for (x > 0) {
+            idx = idx - 1;
+            tmp[idx] = (x % 10)::u8 + 48;
+            x = x / 10;
+        }
+    }
+
+    bytebuf.wbuf_write_bytes(buf, ?tmp[idx], (20 - idx)::usize);
+}
+
+fun write_i32(buf: *bytebuf.WriteBuf, n: i32) {
+    if (n < 0) {
+        write_str(buf, "-");
+        write_u64(buf, (0 - n::i64)::u64);
+    } or {
+        write_u64(buf, n::u64);
+    }
+}
+
+fun write_u16(buf: *bytebuf.WriteBuf, n: u16) {
+    write_u64(buf, n::u64);
+}
+
+fun write_reg(buf: *bytebuf.WriteBuf, reg: u16) {
+    if (reg::i32 == inst.VREG_SP) {
+        write_str(buf, "sp");
+    } or (reg::i32 == inst.VREG_FP) {
+        write_str(buf, "fp");
+    } or {
+        write_str(buf, "r");
+        write_u16(buf, reg);
+    }
+}
+
+fun write_size(buf: *bytebuf.WriteBuf, i: *inst.Instruction) {
+    write_str(buf, ".");
+    write_u64(buf, inst.size(i)::u64);
+}
+
+fun write_label(buf: *bytebuf.WriteBuf, f: *fn.Function, idx: i32) {
+    write_str(buf, ".");
+    val name: str = pool.label_get(?f.labels, idx);
+    if (name != nil) {
+        write_str(buf, name);
+    } or {
+        write_str(buf, "?");
+        write_i32(buf, idx);
+    }
+}
+
+fun write_target_label(buf: *bytebuf.WriteBuf, f: *fn.Function, idx: i32) {
+    write_str(buf, "@");
+    val name: str = pool.label_get(?f.labels, idx);
+    if (name != nil) {
+        write_str(buf, name);
+    } or {
+        write_str(buf, "?");
+        write_i32(buf, idx);
+    }
+}
+
+fun write_disp(buf: *bytebuf.WriteBuf, f: *fn.Function, offset: u16) {
+    val d: i32 = pool.data_get_i32(?f.data_pool, offset::i32);
+    if (d > 0) {
+        write_str(buf, " + ");
+        write_i32(buf, d);
+    } or (d < 0) {
+        write_str(buf, " - ");
+        write_i32(buf, 0 - d);
+    }
+}
+
+fun section_name(sec: sym.SectionKind) str {
+    if (sec == sym.SEC_TEXT) { ret "text"; }
+    if (sec == sym.SEC_DATA) { ret "data"; }
+    if (sec == sym.SEC_RODATA) { ret "rodata"; }
+    if (sec == sym.SEC_BSS) { ret "bss"; }
+    ret "custom";
+}
+
+fun binding_name(b: sym.SymBinding) str {
+    if (b == sym.BIND_LOCAL) { ret "local"; }
+    if (b == sym.BIND_GLOBAL) { ret "global"; }
+    if (b == sym.BIND_WEAK) { ret "weak"; }
+    ret "local";
+}
+
+fun print_data_decl(buf: *bytebuf.WriteBuf, d: *data.DataDecl) {
+    write_str(buf, "data @");
+    write_str(buf, d.name);
+    write_str(buf, " : ");
+    write_str(buf, section_name(d.section));
+    write_str(buf, " ");
+    write_str(buf, binding_name(d.binding));
+    write_str(buf, " align=");
+    write_u64(buf, d.align::u64);
+    write_str(buf, " ");
+    if (d.kind == data.DATA_BYTES) {
+        write_str(buf, "bytes ");
+    } or {
+        write_str(buf, "zero ");
+    }
+    write_u64(buf, d.data_len::u64);
+    write_str(buf, "\n");
+}
+
+fun print_function(buf: *bytebuf.WriteBuf, f: *fn.Function) {
+    write_str(buf, "fun @");
+    write_str(buf, f.name);
+    write_str(buf, "(");
+    write_i32(buf, f.param_count);
+    write_str(buf, " params) flags=");
+    write_u16(buf, f.flags);
+    write_str(buf, " {\n");
+
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil) {
+            write_str(buf, ".");
+            write_str(buf, blk.label);
+            write_str(buf, ":\n");
+
+            var ii: i32 = 0;
+            for (ii < blk.inst_count) {
+                print_inst(buf, f, ?blk.insts[ii]);
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+
+    write_str(buf, "}\n");
+}
+
+fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    val o: u8 = i.op;
+
+    if (o == op.OP_LABEL) { ret; }
+
+    write_str(buf, "  ");
+
+    if (o == op.OP_NOP) {
+        write_str(buf, "nop\n");
+        ret;
+    }
+
+    if (o == op.OP_RET) {
+        write_str(buf, "ret\n");
+        ret;
+    }
+
+    if (o == op.OP_JMP) {
+        write_str(buf, "jmp ");
+        write_label(buf, f, inst.label_idx(i));
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_BRCOND) {
+        write_str(buf, "brcond");
+        val cc: u8 = inst.cc(i);
+        if (cc != op.CC_NONE) {
+            write_str(buf, ".");
+            write_str(buf, op.cc_name(cc));
+        }
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", ");
+        write_label(buf, f, inst.label_idx(i));
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_SYSCALL) {
+        write_str(buf, "syscall ");
+        write_reg(buf, i.f0);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_FENCE) {
+        write_str(buf, "fence.");
+        write_str(buf, op.mo_name(inst.cc(i)));
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_MOV) {
+        print_mov(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_LOAD) {
+        print_load(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_STORE) {
+        print_store(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_ADDR) {
+        print_addr(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_CALL) {
+        print_call(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_ICMP || o == op.OP_FCMP) {
+        write_str(buf, op.op_name(o));
+        write_str(buf, ".");
+        write_str(buf, op.cc_name(inst.cc(i)));
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", ");
+        write_reg(buf, i.f1);
+        write_str(buf, ", ");
+        write_reg(buf, i.f2);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_FTOI) {
+        write_str(buf, "ftoi");
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", ");
+        write_reg(buf, i.f1);
+        write_str(buf, ", ");
+        write_u16(buf, i.f2);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o >= op.OP_ZEXT && o <= op.OP_FTRUNC && o != op.OP_FTOI) {
+        write_str(buf, op.op_name(o));
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", ");
+        write_reg(buf, i.f1);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_PARAM) {
+        write_str(buf, "param");
+        write_size(buf, i);
+        write_str(buf, " p");
+        write_u16(buf, i.f0);
+        write_str(buf, ", ");
+        write_u16(buf, i.f1);
+        write_str(buf, ", td");
+        write_u16(buf, i.f2);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_ARG) {
+        write_str(buf, "arg");
+        write_size(buf, i);
+        write_str(buf, " a");
+        write_u16(buf, i.f0);
+        write_str(buf, ", ");
+        write_reg(buf, i.f1);
+        write_str(buf, ", td");
+        write_u16(buf, i.f2);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_SCARG) {
+        write_str(buf, "scarg");
+        write_size(buf, i);
+        write_str(buf, " a");
+        write_u16(buf, i.f0);
+        write_str(buf, ", ");
+        write_reg(buf, i.f1);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_RETVAL) {
+        write_str(buf, "retval");
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", td");
+        write_u16(buf, i.f2);
+        write_str(buf, "\n");
+        ret;
+    }
+
+    if (o == op.OP_ATOMIC_LOAD) {
+        print_atomic_load(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_ATOMIC_STORE) {
+        print_atomic_store(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_CMPXCHG) {
+        print_cmpxchg(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_ATOMIC_RMW) {
+        print_atomic_rmw(buf, f, i);
+        ret;
+    }
+
+    write_str(buf, op.op_name(o));
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+    write_reg(buf, i.f1);
+    write_str(buf, ", ");
+    write_reg(buf, i.f2);
+    write_str(buf, "\n");
+}
+
+fun print_mov(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "mov");
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+
+    val cc: u8 = inst.cc(i);
+    val fl: u8 = inst.flag(i);
+
+    if (cc == 1 && fl == 0) {
+        val v: i32 = pool.data_get_i32(?f.data_pool, i.f2::i32);
+        write_i32(buf, v);
+    } or (cc == 0 && fl == 1) {
+        val v: u64 = pool.const_get(?f.const_pool, i.f2::i32);
+        write_u64(buf, v);
+    } or {
+        write_reg(buf, i.f1);
+    }
+
+    write_str(buf, "\n");
+}
+
+fun print_load(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "load");
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", [");
+    write_reg(buf, i.f1);
+
+    if (inst.flag(i) == 1) {
+        print_indexed_mem(buf, f, i);
+    } or {
+        write_disp(buf, f, i.f2);
+    }
+
+    write_str(buf, "]\n");
+}
+
+fun print_store(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "store");
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", [");
+    write_reg(buf, i.f1);
+
+    if (inst.flag(i) == 1) {
+        print_indexed_mem(buf, f, i);
+    } or {
+        write_disp(buf, f, i.f2);
+    }
+
+    write_str(buf, "]\n");
+}
+
+fun print_addr(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "addr");
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+
+    val cc: u8 = inst.cc(i);
+
+    if (cc == 1 && inst.flag(i) == 0) {
+        write_target_label(buf, f, i.f2::i32);
+    } or (inst.flag(i) == 1) {
+        write_str(buf, "[");
+        write_reg(buf, i.f1);
+        print_indexed_mem(buf, f, i);
+        write_str(buf, "]");
+    } or {
+        write_str(buf, "[");
+        write_reg(buf, i.f1);
+        write_disp(buf, f, i.f2);
+        write_str(buf, "]");
+    }
+
+    write_str(buf, "\n");
+}
+
+fun print_indexed_mem(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    val packed: i32 = pool.data_get_i32(?f.data_pool, i.f2::i32);
+    val idx_reg: u16 = (packed >> 16)::u16;
+    val disp16: i16 = packed::i16;
+
+    write_str(buf, " + ");
+    write_reg(buf, idx_reg);
+
+    val cc: u8 = inst.cc(i);
+    val scale: i32 = 1 << (cc & 3);
+    if (scale > 1) {
+        write_str(buf, "*");
+        write_i32(buf, scale);
+    }
+
+    if (disp16 > 0) {
+        write_str(buf, " + ");
+        write_i32(buf, disp16::i32);
+    } or (disp16 < 0) {
+        write_str(buf, " - ");
+        write_i32(buf, 0 - disp16::i32);
+    }
+}
+
+fun print_call(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "call");
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+
+    if (inst.flag(i) == 0) {
+        write_target_label(buf, f, inst.label_idx(i));
+    } or {
+        write_reg(buf, i.f1);
+    }
+
+    if ((inst.cc(i) & op.CALL_TAIL) != 0) {
+        write_str(buf, " tail");
+    }
+
+    write_str(buf, "\n");
+}
+
+fun print_atomic_load(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "atomic_load.");
+    write_str(buf, op.mo_name(inst.cc(i)));
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", [");
+    write_reg(buf, i.f1);
+    write_disp(buf, f, i.f2);
+    write_str(buf, "]\n");
+}
+
+fun print_atomic_store(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "atomic_store.");
+    write_str(buf, op.mo_name(inst.cc(i)));
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", [");
+    write_reg(buf, i.f1);
+    write_disp(buf, f, i.f2);
+    write_str(buf, "]\n");
+}
+
+fun print_cmpxchg(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "cmpxchg.");
+    write_str(buf, op.mo_name(inst.cc(i)));
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", [");
+    write_reg(buf, i.f1);
+    write_str(buf, "], ");
+
+    val ptr: *u8 = pool.data_get(?f.data_pool, i.f2::i32);
+    if (ptr != nil) {
+        val expected: u16 = @(ptr::*u16);
+        val new_reg: u16 = @((ptr::usize + 2)::*u16);
+        write_reg(buf, expected);
+        write_str(buf, ", ");
+        write_reg(buf, new_reg);
+    } or {
+        write_str(buf, "?, ?");
+    }
+
+    write_str(buf, "\n");
+}
+
+fun print_atomic_rmw(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "atomic_rmw.");
+
+    val ptr: *u8 = pool.data_get(?f.data_pool, i.f2::i32);
+    if (ptr != nil) {
+        val operand: u16 = @(ptr::*u16);
+        val rmw_op: u8 = ptr[2];
+
+        write_str(buf, op.rmw_name(rmw_op));
+        write_str(buf, ".");
+        write_str(buf, op.mo_name(inst.cc(i)));
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", [");
+        write_reg(buf, i.f1);
+        write_str(buf, "], ");
+        write_reg(buf, operand);
+    } or {
+        write_str(buf, "?.");
+        write_str(buf, op.mo_name(inst.cc(i)));
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", [");
+        write_reg(buf, i.f1);
+        write_str(buf, "], ?");
+    }
+
+    write_str(buf, "\n");
+}

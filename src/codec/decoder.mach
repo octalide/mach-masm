@@ -1,0 +1,554 @@
+# masm.codec.decoder: binary .mo decoder
+#
+# deserializes a .mo byte buffer back into a Module. the inverse of
+# encoder.encode — validates magic/version, reconstructs the string table,
+# symbol table, debug file table, functions (with pools, blocks, type
+# descriptors, debug locs), and data declarations.
+
+use std.types.bool;
+use std.types.size;
+use std.types.result;
+use std.types.string;
+
+use allocator: std.allocator;
+use bytebuf:   std.io.bytebuf;
+use vec:       std.collections.vector;
+use mem:       std.memory;
+
+use op:      masm.op;
+use inst:    masm.inst;
+use pool:    masm.pool;
+use td:      masm.typedesc;
+use sym:     masm.symbol;
+use fn:      masm.function;
+use data:    masm.data;
+use mod:     masm.module;
+use strtab:  masm.strtab;
+use symtab:  masm.symtab;
+use enc:     masm.codec.encoder;
+
+# decode: deserialize a .mo byte buffer into a Module
+# ---
+# alloc: allocator for the reconstructed module
+# raw:   pointer to .mo bytes
+# len:   byte length
+# ret:   reconstructed Module, or error
+pub fun decode(alloc: *allocator.Allocator, raw: *u8, len: usize) Result[mod.Module, str] {
+    if (alloc == nil || raw == nil || len == 0) {
+        ret err[mod.Module, str]("nil argument");
+    }
+
+    var buf: bytebuf.ReadBuf = bytebuf.rbuf_init(raw, len);
+
+    val mr: Result[bool, str] = read_magic(?buf);
+    if (result_is_err[bool, str](mr)) {
+        ret err[mod.Module, str](result_unwrap_err[bool, str](mr));
+    }
+
+    val fc_r: Result[u16, str] = bytebuf.rbuf_read[u16](?buf);
+    if (result_is_err[u16, str](fc_r)) { ret err[mod.Module, str]("truncated header"); }
+    val func_count: u16 = result_unwrap_ok[u16, str](fc_r);
+
+    val dc_r: Result[u16, str] = bytebuf.rbuf_read[u16](?buf);
+    if (result_is_err[u16, str](dc_r)) { ret err[mod.Module, str]("truncated header"); }
+    val data_count: u16 = result_unwrap_ok[u16, str](dc_r);
+
+    val dfc_r: Result[u16, str] = bytebuf.rbuf_read[u16](?buf);
+    if (result_is_err[u16, str](dfc_r)) { ret err[mod.Module, str]("truncated header"); }
+    val debug_file_count: u16 = result_unwrap_ok[u16, str](dfc_r);
+
+    val str_r: Result[strtab.Reader, str] = read_strtab(?buf);
+    if (result_is_err[strtab.Reader, str](str_r)) {
+        ret err[mod.Module, str](result_unwrap_err[strtab.Reader, str](str_r));
+    }
+    var stab: strtab.Reader = result_unwrap_ok[strtab.Reader, str](str_r);
+
+    val sym_r: Result[bool, str] = skip_symtab(?buf);
+    if (result_is_err[bool, str](sym_r)) {
+        ret err[mod.Module, str](result_unwrap_err[bool, str](sym_r));
+    }
+
+    var mb: mod.ModuleBuilder = mod.builder_init(alloc);
+
+    var dfi: u16 = 0;
+    for (dfi < debug_file_count) {
+        val off_r: Result[u32, str] = bytebuf.rbuf_read[u32](?buf);
+        if (result_is_err[u32, str](off_r)) {
+            ret err[mod.Module, str]("truncated debug file table");
+        }
+        val off: u32 = result_unwrap_ok[u32, str](off_r);
+        val name: str = strtab.str_get(?stab, off);
+        if (name != nil && str_len(name) > 0) {
+            mod.builder_add_debug_file(?mb, name);
+        } or {
+            vec.push[str](?mb.debug_files, nil);
+        }
+        dfi = dfi + 1;
+    }
+
+    var fi: u16 = 0;
+    for (fi < func_count) {
+        val fr: Result[*fn.Function, str] = decode_function(alloc, ?buf, ?stab);
+        if (result_is_err[*fn.Function, str](fr)) {
+            ret err[mod.Module, str](result_unwrap_err[*fn.Function, str](fr));
+        }
+        mod.builder_add_function(?mb, result_unwrap_ok[*fn.Function, str](fr));
+        fi = fi + 1;
+    }
+
+    var di: u16 = 0;
+    for (di < data_count) {
+        val dr: Result[data.DataDecl, str] = decode_data_decl(alloc, ?buf, ?stab);
+        if (result_is_err[data.DataDecl, str](dr)) {
+            ret err[mod.Module, str](result_unwrap_err[data.DataDecl, str](dr));
+        }
+        mod.builder_add_data(?mb, result_unwrap_ok[data.DataDecl, str](dr));
+        di = di + 1;
+    }
+
+    ret ok[mod.Module, str](mod.build(?mb));
+}
+
+fun read_magic(buf: *bytebuf.ReadBuf) Result[bool, str] {
+    val m0r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](m0r)) { ret err[bool, str]("truncated magic"); }
+    val m1r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](m1r)) { ret err[bool, str]("truncated magic"); }
+    val m2r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](m2r)) { ret err[bool, str]("truncated magic"); }
+    val m3r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](m3r)) { ret err[bool, str]("truncated magic"); }
+
+    if (result_unwrap_ok[u8, str](m0r) != enc.MAGIC_0 ||
+        result_unwrap_ok[u8, str](m1r) != enc.MAGIC_1 ||
+        result_unwrap_ok[u8, str](m2r) != enc.MAGIC_2 ||
+        result_unwrap_ok[u8, str](m3r) != enc.MAGIC_3) {
+        ret err[bool, str]("invalid magic bytes");
+    }
+
+    val vr: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](vr)) { ret err[bool, str]("truncated version"); }
+    if (result_unwrap_ok[u16, str](vr) != enc.FORMAT_VERSION) {
+        ret err[bool, str]("unsupported format version");
+    }
+
+    val pad_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](pad_r)) { ret err[bool, str]("truncated header"); }
+
+    ret ok[bool, str](true);
+}
+
+fun read_strtab(buf: *bytebuf.ReadBuf) Result[strtab.Reader, str] {
+    val sz_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](sz_r)) {
+        ret err[strtab.Reader, str]("truncated strtab size");
+    }
+    val sz: u32 = result_unwrap_ok[u32, str](sz_r);
+
+    var data: *u8 = nil;
+    if (sz > 0) {
+        val br: Result[*u8, str] = bytebuf.rbuf_read_bytes(buf, sz::usize);
+        if (result_is_err[*u8, str](br)) {
+            ret err[strtab.Reader, str]("truncated strtab data");
+        }
+        data = result_unwrap_ok[*u8, str](br);
+    }
+
+    ret ok[strtab.Reader, str](strtab.str_init(data, sz));
+}
+
+fun skip_symtab(buf: *bytebuf.ReadBuf) Result[bool, str] {
+    val cnt_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](cnt_r)) {
+        ret err[bool, str]("truncated symtab count");
+    }
+    val count: u16 = result_unwrap_ok[u16, str](cnt_r);
+
+    val entry_size: usize = 16;
+    val skip: usize = count::usize * entry_size;
+    if (skip > 0) {
+        val sr: Result[usize, str] = bytebuf.rbuf_skip(buf, skip);
+        if (result_is_err[usize, str](sr)) {
+            ret err[bool, str]("truncated symtab entries");
+        }
+    }
+
+    ret ok[bool, str](true);
+}
+
+fun decode_function(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                    stab: *strtab.Reader) Result[*fn.Function, str] {
+    val name_off_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](name_off_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val name_off: u32 = result_unwrap_ok[u32, str](name_off_r);
+
+    val pc_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](pc_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val param_count: u16 = result_unwrap_ok[u16, str](pc_r);
+
+    val fl_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](fl_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val flags: u16 = result_unwrap_ok[u16, str](fl_r);
+
+    val bc_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](bc_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val block_count: u16 = result_unwrap_ok[u16, str](bc_r);
+
+    val ic_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](ic_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val inst_count: u32 = result_unwrap_ok[u32, str](ic_r);
+
+    val cc_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](cc_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val const_count: u16 = result_unwrap_ok[u16, str](cc_r);
+
+    val dp_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](dp_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val data_pool_size: u32 = result_unwrap_ok[u32, str](dp_r);
+
+    val tc_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](tc_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val target_count: u16 = result_unwrap_ok[u16, str](tc_r);
+
+    val tdc_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](tdc_r)) { ret err[*fn.Function, str]("truncated func header"); }
+    val type_desc_count: u16 = result_unwrap_ok[u16, str](tdc_r);
+
+    val name: str = strtab.str_get(stab, name_off);
+
+    val fr: Result[*fn.Function, allocator.AllocError] =
+        allocator.allocator_alloc[fn.Function](alloc, 1);
+    if (result_is_err[*fn.Function, allocator.AllocError](fr)) {
+        ret err[*fn.Function, str]("alloc failed");
+    }
+    val f: *fn.Function = result_unwrap_ok[*fn.Function, allocator.AllocError](fr);
+    @f = fn.func_init(alloc, name);
+    f.param_count = param_count::i32;
+    f.flags = flags & (fn.FUNC_VARIADIC | fn.FUNC_NORETURN);
+
+    val cpr: Result[bool, str] = decode_const_pool(alloc, buf, ?f.const_pool, const_count);
+    if (result_is_err[bool, str](cpr)) {
+        ret err[*fn.Function, str](result_unwrap_err[bool, str](cpr));
+    }
+
+    val dpr: Result[bool, str] = decode_data_pool(alloc, buf, ?f.data_pool, data_pool_size);
+    if (result_is_err[bool, str](dpr)) {
+        ret err[*fn.Function, str](result_unwrap_err[bool, str](dpr));
+    }
+
+    val ttr: Result[bool, str] = decode_target_table(alloc, buf, stab, ?f.labels, target_count);
+    if (result_is_err[bool, str](ttr)) {
+        ret err[*fn.Function, str](result_unwrap_err[bool, str](ttr));
+    }
+
+    val tdr: Result[bool, str] = decode_type_descs(alloc, buf, ?f.type_descs, type_desc_count);
+    if (result_is_err[bool, str](tdr)) {
+        ret err[*fn.Function, str](result_unwrap_err[bool, str](tdr));
+    }
+
+    val br: Result[bool, str] = decode_blocks(alloc, buf, f, block_count, inst_count);
+    if (result_is_err[bool, str](br)) {
+        ret err[*fn.Function, str](result_unwrap_err[bool, str](br));
+    }
+
+    if ((flags & fn.FUNC_HAS_DEBUG) != 0) {
+        val dlr: Result[bool, str] = decode_debug_locs(buf, f, block_count);
+        if (result_is_err[bool, str](dlr)) {
+            ret err[*fn.Function, str](result_unwrap_err[bool, str](dlr));
+        }
+    }
+
+    ret ok[*fn.Function, str](f);
+}
+
+fun decode_const_pool(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                      cp: *pool.ConstPool, count: u16) Result[bool, str] {
+    var i: u16 = 0;
+    for (i < count) {
+        val vr: Result[u64, str] = bytebuf.rbuf_read[u64](buf);
+        if (result_is_err[u64, str](vr)) { ret err[bool, str]("truncated const pool"); }
+        pool.const_intern(alloc, cp, result_unwrap_ok[u64, str](vr));
+        i = i + 1;
+    }
+    ret ok[bool, str](true);
+}
+
+fun decode_data_pool(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                     dp: *pool.DataPool, size: u32) Result[bool, str] {
+    if (size == 0) { ret ok[bool, str](true); }
+
+    val br: Result[*u8, str] = bytebuf.rbuf_read_bytes(buf, size::usize);
+    if (result_is_err[*u8, str](br)) { ret err[bool, str]("truncated data pool"); }
+    val src: *u8 = result_unwrap_ok[*u8, str](br);
+
+    val ar: Result[*u8, allocator.AllocError] =
+        allocator.allocator_alloc[u8](alloc, size::usize);
+    if (result_is_err[*u8, allocator.AllocError](ar)) {
+        ret err[bool, str]("alloc failed");
+    }
+    dp.data = result_unwrap_ok[*u8, allocator.AllocError](ar);
+    mem.raw_copy(dp.data::ptr, src::ptr, size::usize);
+    dp.data_len = size::i32;
+    dp.data_cap = size::i32;
+
+    ret ok[bool, str](true);
+}
+
+fun decode_target_table(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                        stab: *strtab.Reader, labels: *pool.LabelTable,
+                        count: u16) Result[bool, str] {
+    var i: u16 = 0;
+    for (i < count) {
+        val no_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+        if (result_is_err[u32, str](no_r)) { ret err[bool, str]("truncated target table"); }
+        val name_off: u32 = result_unwrap_ok[u32, str](no_r);
+
+        val idx_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+        if (result_is_err[u32, str](idx_r)) { ret err[bool, str]("truncated target table"); }
+
+        val name: str = strtab.str_get(stab, name_off);
+        pool.label_intern(alloc, labels, name);
+        i = i + 1;
+    }
+    ret ok[bool, str](true);
+}
+
+fun decode_type_descs(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                      tdt: *td.TypeDescTable, count: u16) Result[bool, str] {
+    var i: u16 = 0;
+    for (i < count) {
+        val kr: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+        if (result_is_err[u8, str](kr)) { ret err[bool, str]("truncated type desc"); }
+        val kind: u8 = result_unwrap_ok[u8, str](kr);
+
+        val tsr: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+        if (result_is_err[u16, str](tsr)) { ret err[bool, str]("truncated type desc"); }
+        val total_size: u16 = result_unwrap_ok[u16, str](tsr);
+
+        val ar: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+        if (result_is_err[u8, str](ar)) { ret err[bool, str]("truncated type desc"); }
+        val align: u8 = result_unwrap_ok[u8, str](ar);
+
+        val fcr: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+        if (result_is_err[u8, str](fcr)) { ret err[bool, str]("truncated type desc"); }
+        val field_count: u8 = result_unwrap_ok[u8, str](fcr);
+
+        var fields: *td.TypeDescField = nil;
+        if (field_count > 0) {
+            val fa: Result[*td.TypeDescField, allocator.AllocError] =
+                allocator.allocator_alloc[td.TypeDescField](alloc, field_count::usize);
+            if (result_is_err[*td.TypeDescField, allocator.AllocError](fa)) {
+                ret err[bool, str]("alloc failed");
+            }
+            fields = result_unwrap_ok[*td.TypeDescField, allocator.AllocError](fa);
+
+            var fi: u8 = 0;
+            for (fi < field_count) {
+                val fo: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+                if (result_is_err[u16, str](fo)) { ret err[bool, str]("truncated type desc field"); }
+                fields[fi].offset = result_unwrap_ok[u16, str](fo);
+
+                val fk: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+                if (result_is_err[u8, str](fk)) { ret err[bool, str]("truncated type desc field"); }
+                fields[fi].kind = result_unwrap_ok[u8, str](fk);
+
+                val fs: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+                if (result_is_err[u8, str](fs)) { ret err[bool, str]("truncated type desc field"); }
+                fields[fi].size = result_unwrap_ok[u8, str](fs);
+                fi = fi + 1;
+            }
+        }
+
+        td.intern(tdt, td.make_agg(total_size, align, fields, field_count));
+        i = i + 1;
+    }
+    ret ok[bool, str](true);
+}
+
+fun decode_blocks(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                  f: *fn.Function, block_count: u16,
+                  total_inst_count: u32) Result[bool, str] {
+    val br: Result[*u8, allocator.AllocError] =
+        allocator.allocator_alloc[u8](alloc, block_count::usize * 8);
+    if (result_is_err[*u8, allocator.AllocError](br)) {
+        ret err[bool, str]("alloc failed");
+    }
+    val block_table: *u8 = result_unwrap_ok[*u8, allocator.AllocError](br);
+
+    var bi: u16 = 0;
+    for (bi < block_count) {
+        val lo_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+        if (result_is_err[u32, str](lo_r)) { ret err[bool, str]("truncated block table"); }
+        val ic_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+        if (result_is_err[u32, str](ic_r)) { ret err[bool, str]("truncated block table"); }
+
+        val off: usize = bi::usize * 8;
+        @((block_table::usize + off)::*u32) = result_unwrap_ok[u32, str](lo_r);
+        @((block_table::usize + off + 4)::*u32) = result_unwrap_ok[u32, str](ic_r);
+        bi = bi + 1;
+    }
+
+    val insts_r: Result[*u8, str] = bytebuf.rbuf_read_bytes(buf, total_inst_count::usize * 8);
+    if (result_is_err[*u8, str](insts_r)) { ret err[bool, str]("truncated instructions"); }
+    val all_insts: *inst.Instruction = (result_unwrap_ok[*u8, str](insts_r))::*inst.Instruction;
+
+    var inst_offset: u32 = 0;
+    var bi2: u16 = 0;
+    for (bi2 < block_count) {
+        val off: usize = bi2::usize * 8;
+        val label_off: u32 = @((block_table::usize + off)::*u32);
+        val blk_inst_count: u32 = @((block_table::usize + off + 4)::*u32);
+
+        val label: str = strtab.str_get(buf, label_off);
+
+        val ba: Result[*fn.Block, allocator.AllocError] =
+            allocator.allocator_alloc[fn.Block](alloc, 1);
+        if (result_is_err[*fn.Block, allocator.AllocError](ba)) {
+            allocator.allocator_free[u8](alloc, block_table, block_count::usize * 8);
+            ret err[bool, str]("alloc failed");
+        }
+        val blk: *fn.Block = result_unwrap_ok[*fn.Block, allocator.AllocError](ba);
+        @blk = fn.block_init(label);
+
+        var ii: u32 = 0;
+        for (ii < blk_inst_count) {
+            fn.block_append(alloc, blk, all_insts[inst_offset + ii]);
+            ii = ii + 1;
+        }
+
+        fn.func_add_block(f, blk);
+        inst_offset = inst_offset + blk_inst_count;
+        bi2 = bi2 + 1;
+    }
+
+    allocator.allocator_free[u8](alloc, block_table, block_count::usize * 8);
+    ret ok[bool, str](true);
+}
+
+fun decode_debug_locs(buf: *bytebuf.ReadBuf, f: *fn.Function,
+                      block_count: u16) Result[bool, str] {
+    var bi: usize = 0;
+    for (bi < f.blocks.len) {
+        val blk: *fn.Block = f.blocks.data[bi];
+        if (blk != nil) {
+            var ii: i32 = 0;
+            for (ii < blk.inst_count) {
+                val lr: Result[i32, str] = bytebuf.rbuf_read[i32](buf);
+                if (result_is_err[i32, str](lr)) { ret err[bool, str]("truncated debug locs"); }
+                val fr: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+                if (result_is_err[u16, str](fr)) { ret err[bool, str]("truncated debug locs"); }
+                val pr: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+                if (result_is_err[u16, str](pr)) { ret err[bool, str]("truncated debug locs"); }
+
+                fn.block_set_debug(blk, ii,
+                    result_unwrap_ok[i32, str](lr),
+                    result_unwrap_ok[u16, str](fr));
+                ii = ii + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    ret ok[bool, str](true);
+}
+
+fun decode_data_decl(alloc: *allocator.Allocator, buf: *bytebuf.ReadBuf,
+                     stab: *strtab.Reader) Result[data.DataDecl, str] {
+    val no_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](no_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+    val name_off: u32 = result_unwrap_ok[u32, str](no_r);
+
+    val sec_r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](sec_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+
+    val bind_r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](bind_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+
+    val st_r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](st_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+
+    val kind_r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](kind_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+
+    val align_r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+    if (result_is_err[u8, str](align_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+
+    bytebuf.rbuf_skip(buf, 3);
+
+    val dlen_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](dlen_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+    val data_len: u32 = result_unwrap_ok[u32, str](dlen_r);
+
+    val rc_r: Result[u16, str] = bytebuf.rbuf_read[u16](buf);
+    if (result_is_err[u16, str](rc_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+    val reloc_count: u16 = result_unwrap_ok[u16, str](rc_r);
+
+    val sfo_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+    if (result_is_err[u32, str](sfo_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+    val src_file_off: u32 = result_unwrap_ok[u32, str](sfo_r);
+
+    val sl_r: Result[i32, str] = bytebuf.rbuf_read[i32](buf);
+    if (result_is_err[i32, str](sl_r)) { ret err[data.DataDecl, str]("truncated data decl"); }
+    val src_line: i32 = result_unwrap_ok[i32, str](sl_r);
+
+    val kind: u8 = result_unwrap_ok[u8, str](kind_r);
+
+    var d: data.DataDecl;
+    d.name = strtab.str_get(stab, name_off);
+    d.section = result_unwrap_ok[u8, str](sec_r);
+    d.binding = result_unwrap_ok[u8, str](bind_r);
+    d.sym_type = result_unwrap_ok[u8, str](st_r);
+    d.kind = kind;
+    d.align = result_unwrap_ok[u8, str](align_r);
+    d.data = nil;
+    d.data_len = data_len;
+    d.relocs = nil;
+    d.reloc_count = 0;
+    d.reloc_cap = 0;
+    d.src_file = nil;
+    d.src_line = src_line;
+
+    if (src_file_off > 0) {
+        d.src_file = strtab.str_get(stab, src_file_off);
+    }
+
+    if (kind == data.DATA_BYTES && data_len > 0) {
+        val br: Result[*u8, str] = bytebuf.rbuf_read_bytes(buf, data_len::usize);
+        if (result_is_err[*u8, str](br)) { ret err[data.DataDecl, str]("truncated data bytes"); }
+        val src: *u8 = result_unwrap_ok[*u8, str](br);
+
+        val ar: Result[*u8, allocator.AllocError] =
+            allocator.allocator_alloc[u8](alloc, data_len::usize);
+        if (result_is_err[*u8, allocator.AllocError](ar)) {
+            ret err[data.DataDecl, str]("alloc failed");
+        }
+        d.data = result_unwrap_ok[*u8, allocator.AllocError](ar);
+        mem.raw_copy(d.data::ptr, src::ptr, data_len::usize);
+    }
+
+    var ri: u16 = 0;
+    for (ri < reloc_count) {
+        val ro_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+        if (result_is_err[u32, str](ro_r)) { ret err[data.DataDecl, str]("truncated reloc"); }
+        val roffset: u32 = result_unwrap_ok[u32, str](ro_r);
+
+        val rt_r: Result[u32, str] = bytebuf.rbuf_read[u32](buf);
+        if (result_is_err[u32, str](rt_r)) { ret err[data.DataDecl, str]("truncated reloc"); }
+        val target_off: u32 = result_unwrap_ok[u32, str](rt_r);
+
+        val rk_r: Result[u8, str] = bytebuf.rbuf_read[u8](buf);
+        if (result_is_err[u8, str](rk_r)) { ret err[data.DataDecl, str]("truncated reloc"); }
+        val rkind: u8 = result_unwrap_ok[u8, str](rk_r);
+
+        bytebuf.rbuf_skip(buf, 3);
+
+        val ra_r: Result[i64, str] = bytebuf.rbuf_read[i64](buf);
+        if (result_is_err[i64, str](ra_r)) { ret err[data.DataDecl, str]("truncated reloc"); }
+        val addend: i64 = result_unwrap_ok[i64, str](ra_r);
+
+        val target: str = strtab.str_get(stab, target_off);
+        data.add_reloc(alloc, ?d, roffset, target, rkind, addend);
+        ri = ri + 1;
+    }
+
+    ret ok[data.DataDecl, str](d);
+}
