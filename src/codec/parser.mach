@@ -82,7 +82,7 @@ fun tok_str_equals(t: *Token, s: str) bool {
     if (t.len != slen) { ret false; }
     var i: i32 = 0;
     for (i < slen) {
-        if (t.start[i] != s::usize::*u8[i]) { ret false; }
+        if (t.start[i] != s[i]) { ret false; }
         i = i + 1;
     }
     ret true;
