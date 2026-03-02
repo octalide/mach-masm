@@ -12,13 +12,10 @@ use std.types.string;
 
 use alloc: std.allocator;
 use print: std.print;
-use vec:   std.collections.vector;
 
-use op:     masm.op;
-use inst:   masm.inst;
-use fn:     masm.function;
-use mod:    masm.module;
-use codec:  masm.codec;
+use fn:    masm.function;
+use mod:   masm.module;
+use codec: masm.codec;
 
 fun print_usage() {
     print.eprintln("usage: masm <command> [options]");
