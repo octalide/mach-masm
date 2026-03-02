@@ -60,7 +60,7 @@ pub fun print(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.WriteB
 
 fun write_str(buf: *bytebuf.WriteBuf, s: str) {
     if (s == nil) { ret; }
-    bytebuf.wbuf_write_bytes(buf, s::usize::*u8, str_len(s));
+    bytebuf.wbuf_write_bytes(buf, s, str_len(s));
 }
 
 fun write_u64(buf: *bytebuf.WriteBuf, n: u64) {
@@ -495,7 +495,7 @@ fun print_indexed_mem(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruct
     write_reg(buf, idx_reg);
 
     val cc: u8 = inst.cc(i);
-    val scale: i32 = 1::i32 << (cc::i32 & 3);
+    val scale: i32 = 1 << (cc::i32 & 3);
     if (scale > 1) {
         write_str(buf, "*");
         write_i32(buf, scale);
