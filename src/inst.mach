@@ -27,7 +27,7 @@ pub val REG_NONE:   u8  = 0;
 # meta: packed metadata
 # f0:   typically destination register or parameter index
 # f1:   typically source register or base register
-# f2:   source register, pool index, label index, or literal
+# f2:   source register, pool offset, label index, or literal
 pub rec Instruction {
     op:   u8;
     meta: u8;
@@ -219,11 +219,11 @@ pub fun make_ftoi(dst: u16, src: u16, dst_size: u8, src_float_size: u8) Instruct
 # reg-reg MOV by cc=1.
 # ---
 # dst:      destination register
-# pool_idx: data pool index containing the i32 value
+# pool_off: data pool byte offset containing the i32 value
 # size:     operation size in bytes
 # ret:      constructed instruction
-pub fun make_mov_imm32(dst: u16, pool_idx: u16, size: u8) Instruction {
-    ret mk(op.OP_MOV, make_meta(1, size, 0), dst, 0, pool_idx);
+pub fun make_mov_imm32(dst: u16, pool_off: u16, size: u8) Instruction {
+    ret mk(op.OP_MOV, make_meta(1, size, 0), dst, 0, pool_off);
 }
 
 # make_mov_imm64: move a 64-bit immediate from the constant pool into a register
@@ -232,22 +232,22 @@ pub fun make_mov_imm32(dst: u16, pool_idx: u16, size: u8) Instruction {
 # reg-reg MOV by flag=1.
 # ---
 # dst:      destination register
-# pool_idx: constant pool index containing the u64 value
+# pool_off: constant pool offset containing the u64 value
 # size:     operation size in bytes
 # ret:      constructed instruction
-pub fun make_mov_imm64(dst: u16, pool_idx: u16, size: u8) Instruction {
-    ret mk(op.OP_MOV, make_meta(0, size, 1), dst, 0, pool_idx);
+pub fun make_mov_imm64(dst: u16, pool_off: u16, size: u8) Instruction {
+    ret mk(op.OP_MOV, make_meta(0, size, 1), dst, 0, pool_off);
 }
 
 # make_load: load from memory at base+displacement
 # ---
 # dst:      destination register
 # base:     base register
-# disp_idx: data pool index containing the i32 displacement
+# disp_off: data pool byte offset containing the i32 displacement
 # size:     load size in bytes
 # ret:      constructed instruction
-pub fun make_load(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
-    ret mk(op.OP_LOAD, make_meta(0, size, 0), dst, base, disp_idx);
+pub fun make_load(dst: u16, base: u16, disp_off: u16, size: u8) Instruction {
+    ret mk(op.OP_LOAD, make_meta(0, size, 0), dst, base, disp_off);
 }
 
 # make_load_indexed: load from memory at base+index*scale+displacement
@@ -258,58 +258,58 @@ pub fun make_load(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
 # ---
 # dst:        destination register
 # base:       base register
-# packed_idx: data pool index containing packed(index:u16, disp:i16)
+# packed_off: data pool byte offset containing packed(index:u16, disp:i16)
 # scale:      index scale factor (1, 2, 4, or 8)
 # size:       load size in bytes
 # ret:        constructed instruction
-pub fun make_load_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
-    ret mk(op.OP_LOAD, make_meta(encode_scale(scale), size, 1), dst, base, packed_idx);
+pub fun make_load_indexed(dst: u16, base: u16, packed_off: u16, scale: u8, size: u8) Instruction {
+    ret mk(op.OP_LOAD, make_meta(encode_scale(scale), size, 1), dst, base, packed_off);
 }
 
 # make_store: store to memory at base+displacement
 # ---
 # src:      source register (value to store)
 # base:     base register
-# disp_idx: data pool index containing the i32 displacement
+# disp_off: data pool byte offset containing the i32 displacement
 # size:     store size in bytes
 # ret:      constructed instruction
-pub fun make_store(src: u16, base: u16, disp_idx: u16, size: u8) Instruction {
-    ret mk(op.OP_STORE, make_meta(0, size, 0), src, base, disp_idx);
+pub fun make_store(src: u16, base: u16, disp_off: u16, size: u8) Instruction {
+    ret mk(op.OP_STORE, make_meta(0, size, 0), src, base, disp_off);
 }
 
 # make_store_indexed: store to memory at base+index*scale+displacement
 # ---
 # src:        source register (value to store)
 # base:       base register
-# packed_idx: data pool index containing packed(index:u16, disp:i16)
+# packed_off: data pool byte offset containing packed(index:u16, disp:i16)
 # scale:      index scale factor (1, 2, 4, or 8)
 # size:       store size in bytes
 # ret:        constructed instruction
-pub fun make_store_indexed(src: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
-    ret mk(op.OP_STORE, make_meta(encode_scale(scale), size, 1), src, base, packed_idx);
+pub fun make_store_indexed(src: u16, base: u16, packed_off: u16, scale: u8, size: u8) Instruction {
+    ret mk(op.OP_STORE, make_meta(encode_scale(scale), size, 1), src, base, packed_off);
 }
 
 # make_addr: compute effective address of base+displacement (no memory access)
 # ---
 # dst:      destination register
 # base:     base register
-# disp_idx: data pool index containing the i32 displacement
+# disp_off: data pool byte offset containing the i32 displacement
 # size:     pointer size in bytes
 # ret:      constructed instruction
-pub fun make_addr(dst: u16, base: u16, disp_idx: u16, size: u8) Instruction {
-    ret mk(op.OP_ADDR, make_meta(0, size, 0), dst, base, disp_idx);
+pub fun make_addr(dst: u16, base: u16, disp_off: u16, size: u8) Instruction {
+    ret mk(op.OP_ADDR, make_meta(0, size, 0), dst, base, disp_off);
 }
 
 # make_addr_indexed: compute effective address of base+index*scale+displacement
 # ---
 # dst:        destination register
 # base:       base register
-# packed_idx: data pool index containing packed(index:u16, disp:i16)
+# packed_off: data pool byte offset containing packed(index:u16, disp:i16)
 # scale:      index scale factor (1, 2, 4, or 8)
 # size:       pointer size in bytes
 # ret:        constructed instruction
-pub fun make_addr_indexed(dst: u16, base: u16, packed_idx: u16, scale: u8, size: u8) Instruction {
-    ret mk(op.OP_ADDR, make_meta(encode_scale(scale), size, 1), dst, base, packed_idx);
+pub fun make_addr_indexed(dst: u16, base: u16, packed_off: u16, scale: u8, size: u8) Instruction {
+    ret mk(op.OP_ADDR, make_meta(encode_scale(scale), size, 1), dst, base, packed_off);
 }
 
 # make_addr_label: load the address of a label into a register
@@ -452,24 +452,24 @@ pub fun make_retval(value_reg: u16, type_desc_idx: u16, size: u8) Instruction {
 # ---
 # dst:      destination register
 # base:     base register
-# disp_idx: data pool index containing the i32 displacement
+# disp_off: data pool byte offset containing the i32 displacement
 # size:     load size in bytes
 # ordering: memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:      constructed instruction
-pub fun make_atomic_load(dst: u16, base: u16, disp_idx: u16, size: u8, ordering: u8) Instruction {
-    ret mk(op.OP_ATOMIC_LOAD, make_meta(ordering, size, 0), dst, base, disp_idx);
+pub fun make_atomic_load(dst: u16, base: u16, disp_off: u16, size: u8, ordering: u8) Instruction {
+    ret mk(op.OP_ATOMIC_LOAD, make_meta(ordering, size, 0), dst, base, disp_off);
 }
 
 # make_atomic_store: atomic store to memory at base+displacement
 # ---
 # src:      source register (value to store)
 # base:     base register
-# disp_idx: data pool index containing the i32 displacement
+# disp_off: data pool byte offset containing the i32 displacement
 # size:     store size in bytes
 # ordering: memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:      constructed instruction
-pub fun make_atomic_store(src: u16, base: u16, disp_idx: u16, size: u8, ordering: u8) Instruction {
-    ret mk(op.OP_ATOMIC_STORE, make_meta(ordering, size, 0), src, base, disp_idx);
+pub fun make_atomic_store(src: u16, base: u16, disp_off: u16, size: u8, ordering: u8) Instruction {
+    ret mk(op.OP_ATOMIC_STORE, make_meta(ordering, size, 0), src, base, disp_off);
 }
 
 # make_cmpxchg: atomic compare-and-swap
@@ -480,12 +480,12 @@ pub fun make_atomic_store(src: u16, base: u16, disp_idx: u16, size: u8, ordering
 # ---
 # result:     register receiving the old value
 # base:       base register
-# packed_idx: data pool index for packed{expected:u16, new:u16, disp:i32}
+# packed_off: data pool byte offset for packed{expected:u16, new:u16, disp:i32}
 # size:       operand size in bytes
 # ordering:   memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:        constructed instruction
-pub fun make_cmpxchg(result: u16, base: u16, packed_idx: u16, size: u8, ordering: u8) Instruction {
-    ret mk(op.OP_CMPXCHG, make_meta(ordering, size, 0), result, base, packed_idx);
+pub fun make_cmpxchg(result: u16, base: u16, packed_off: u16, size: u8, ordering: u8) Instruction {
+    ret mk(op.OP_CMPXCHG, make_meta(ordering, size, 0), result, base, packed_off);
 }
 
 # make_fence: memory barrier
@@ -504,12 +504,12 @@ pub fun make_fence(ordering: u8) Instruction {
 # ---
 # result:     register receiving the old value
 # base:       base register
-# packed_idx: data pool index for packed{operand:u16, rmw_op:u8, pad:u8, disp:i32}
+# packed_off: data pool byte offset for packed{operand:u16, rmw_op:u8, pad:u8, disp:i32}
 # size:       operand size in bytes
 # ordering:   memory ordering (MO_RELAXED..MO_SEQ_CST)
 # ret:        constructed instruction
-pub fun make_atomic_rmw(result: u16, base: u16, packed_idx: u16, size: u8, ordering: u8) Instruction {
-    ret mk(op.OP_ATOMIC_RMW, make_meta(ordering, size, 0), result, base, packed_idx);
+pub fun make_atomic_rmw(result: u16, base: u16, packed_off: u16, size: u8, ordering: u8) Instruction {
+    ret mk(op.OP_ATOMIC_RMW, make_meta(ordering, size, 0), result, base, packed_off);
 }
 
 # is_vreg: test whether a register ID refers to a virtual register
