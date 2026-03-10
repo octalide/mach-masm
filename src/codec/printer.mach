@@ -215,8 +215,15 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
 
     write_str(buf, "  ");
 
-    if (o == op.OP_NOP) {
-        write_str(buf, "nop\n");
+    if (o == op.OP_TRAP) {
+        write_str(buf, "trap\n");
+        ret;
+    }
+
+    if (o == op.OP_HINT) {
+        write_str(buf, "hint.");
+        write_str(buf, op.hint_name(inst.cc(i)));
+        write_str(buf, "\n");
         ret;
     }
 
@@ -242,8 +249,8 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
         ret;
     }
 
-    if (o == op.OP_BRCOND) {
-        write_str(buf, "brcond");
+    if (o == op.OP_BRANCH) {
+        write_str(buf, "branch");
         val cc: u8 = inst.cc(i);
         if (cc != op.CC_NONE) {
             write_str(buf, ".");
@@ -296,10 +303,16 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
         ret;
     }
 
-    if (o == op.OP_ICMP || o == op.OP_FCMP) {
-        write_str(buf, op.op_name(o));
-        write_str(buf, ".");
-        write_str(buf, op.cc_name(inst.cc(i)));
+    if (o == op.OP_CMP) {
+        write_str(buf, "cmp");
+        if (inst.flag(i) == 1) {
+            write_str(buf, ".f");
+        }
+        val cc: u8 = inst.cc(i);
+        if (cc != op.CC_NONE) {
+            write_str(buf, ".");
+            write_str(buf, op.cc_name(cc));
+        }
         write_size(buf, i);
         write_str(buf, " ");
         write_reg(buf, i.f0);
@@ -311,27 +324,18 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
         ret;
     }
 
-    if (o == op.OP_FTOI) {
-        write_str(buf, "ftoi");
-        write_size(buf, i);
-        write_str(buf, " ");
-        write_reg(buf, i.f0);
-        write_str(buf, ", ");
-        write_reg(buf, i.f1);
-        write_str(buf, ", ");
-        write_u16(buf, i.f2);
-        write_str(buf, "\n");
+    if (o == op.OP_CONV) {
+        print_conv(buf, f, i);
         ret;
     }
 
-    if (o >= op.OP_ZEXT && o <= op.OP_FTRUNC && o != op.OP_FTOI) {
-        write_str(buf, op.op_name(o));
-        write_size(buf, i);
-        write_str(buf, " ");
-        write_reg(buf, i.f0);
-        write_str(buf, ", ");
-        write_reg(buf, i.f1);
-        write_str(buf, "\n");
+    if (o == op.OP_DIV) {
+        print_div(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_SHR) {
+        print_shr(buf, f, i);
         ret;
     }
 
@@ -347,25 +351,20 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
     }
 
     if (o == op.OP_ARG) {
-        write_str(buf, "arg");
+        if (inst.flag(i) == 1) {
+            write_str(buf, "arg.sc");
+        } or {
+            write_str(buf, "arg");
+        }
         write_size(buf, i);
         write_str(buf, " a");
         write_u16(buf, i.f0);
         write_str(buf, ", ");
         write_reg(buf, i.f1);
-        write_str(buf, ", td");
-        write_u16(buf, i.f2);
-        write_str(buf, "\n");
-        ret;
-    }
-
-    if (o == op.OP_SCARG) {
-        write_str(buf, "scarg");
-        write_size(buf, i);
-        write_str(buf, " a");
-        write_u16(buf, i.f0);
-        write_str(buf, ", ");
-        write_reg(buf, i.f1);
+        if (inst.flag(i) == 0) {
+            write_str(buf, ", td");
+            write_u16(buf, i.f2);
+        }
         write_str(buf, "\n");
         ret;
     }
@@ -380,13 +379,34 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
         ret;
     }
 
-    if (o == op.OP_CMPXCHG) {
-        print_cmpxchg(buf, f, i);
+    if (o == op.OP_ATOMIC_CAS) {
+        print_atomic_cas(buf, f, i);
         ret;
     }
 
     if (o == op.OP_ATOMIC_RMW) {
         print_atomic_rmw(buf, f, i);
+        ret;
+    }
+
+    if (o == op.OP_ADD || o == op.OP_SUB || o == op.OP_MUL) {
+        write_str(buf, op.op_name(o));
+        if (inst.cc(i) == op.ALU_FLOAT) {
+            write_str(buf, ".f");
+        }
+        write_size(buf, i);
+        write_str(buf, " ");
+        write_reg(buf, i.f0);
+        write_str(buf, ", ");
+        write_reg(buf, i.f1);
+        write_str(buf, ", ");
+        if (inst.flag(i) == 1) {
+            val v: u64 = pool.const_get(?f.const_pool, i.f2::i32);
+            write_u64(buf, v);
+        } or {
+            write_reg(buf, i.f2);
+        }
+        write_str(buf, "\n");
         ret;
     }
 
@@ -533,8 +553,67 @@ fun print_call(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
     write_str(buf, "\n");
 }
 
+fun print_conv(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    val kind: u8 = inst.cc(i);
+    write_str(buf, "conv.");
+    write_str(buf, op.conv_name(kind));
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+    write_reg(buf, i.f1);
+    if (kind == op.CONV_FTOI && i.f2 != 0) {
+        write_str(buf, ", ");
+        write_u16(buf, i.f2);
+    }
+    write_str(buf, "\n");
+}
+
+fun print_div(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    val mode: u8 = inst.cc(i);
+    write_str(buf, "div");
+    val suffix: str = op.div_name(mode);
+    if (suffix != nil && str_len(suffix) > 0) {
+        write_str(buf, ".");
+        write_str(buf, suffix);
+    }
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+    write_reg(buf, i.f1);
+    write_str(buf, ", ");
+    if (inst.flag(i) == 1) {
+        val v: u64 = pool.const_get(?f.const_pool, i.f2::i32);
+        write_u64(buf, v);
+    } or {
+        write_reg(buf, i.f2);
+    }
+    write_str(buf, "\n");
+}
+
+fun print_shr(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "shr");
+    if (inst.cc(i) == op.SHR_ARITHMETIC) {
+        write_str(buf, ".a");
+    }
+    write_size(buf, i);
+    write_str(buf, " ");
+    write_reg(buf, i.f0);
+    write_str(buf, ", ");
+    write_reg(buf, i.f1);
+    write_str(buf, ", ");
+    if (inst.flag(i) == 1) {
+        val v: u64 = pool.const_get(?f.const_pool, i.f2::i32);
+        write_u64(buf, v);
+    } or {
+        write_reg(buf, i.f2);
+    }
+    write_str(buf, "\n");
+}
+
 fun print_atomic_load(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
-    write_str(buf, "atomic_load.");
+    write_str(buf, "atomic.load.");
     write_str(buf, op.mo_name(inst.cc(i)));
     write_size(buf, i);
     write_str(buf, " ");
@@ -546,7 +625,7 @@ fun print_atomic_load(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruct
 }
 
 fun print_atomic_store(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
-    write_str(buf, "atomic_store.");
+    write_str(buf, "atomic.store.");
     write_str(buf, op.mo_name(inst.cc(i)));
     write_size(buf, i);
     write_str(buf, " ");
@@ -557,8 +636,8 @@ fun print_atomic_store(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruc
     write_str(buf, "]\n");
 }
 
-fun print_cmpxchg(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
-    write_str(buf, "cmpxchg.");
+fun print_atomic_cas(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
+    write_str(buf, "atomic.cas.");
     write_str(buf, op.mo_name(inst.cc(i)));
     write_size(buf, i);
     write_str(buf, " ");
@@ -582,7 +661,7 @@ fun print_cmpxchg(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction)
 }
 
 fun print_atomic_rmw(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
-    write_str(buf, "atomic_rmw.");
+    write_str(buf, "atomic.rmw.");
 
     val ptr: *u8 = pool.data_get(?f.data_pool, i.f2::i32);
     if (ptr != nil) {
