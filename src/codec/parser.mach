@@ -155,7 +155,7 @@ fun lex_next(l: *Lexer) {
         l.pos = (l.pos::usize + 1)::*u8;
         if (l.pos::usize < l.end::usize && is_alpha(@l.pos)) {
             val start: *u8 = l.pos;
-            for (l.pos::usize < l.end::usize && is_alnum(@l.pos)) {
+            for (l.pos::usize < l.end::usize && (is_alnum(@l.pos) || @l.pos == 95)) {
                 l.pos = (l.pos::usize + 1)::*u8;
             }
             l.cur.kind = TOK_DOT_LBL;
@@ -415,52 +415,47 @@ fun parse_data_decl(alloc: *allocator.Allocator, l: *Lexer) Result[data.DataDecl
     ret ok[data.DataDecl, str](d);
 }
 
+# lookup_op: match current token(s) to an opcode, consuming them
+#
+# handles compound opcodes like "atomic.load" by consuming multiple tokens.
+# after return, l.cur points to the token AFTER the opcode.
 fun lookup_op(l: *Lexer) u8 {
-    if (tok_str_equals(?l.cur, "mov")) { ret op.OP_MOV; }
-    if (tok_str_equals(?l.cur, "load")) { ret op.OP_LOAD; }
-    if (tok_str_equals(?l.cur, "store")) { ret op.OP_STORE; }
-    if (tok_str_equals(?l.cur, "addr")) { ret op.OP_ADDR; }
-    if (tok_str_equals(?l.cur, "add")) { ret op.OP_ADD; }
-    if (tok_str_equals(?l.cur, "sub")) { ret op.OP_SUB; }
-    if (tok_str_equals(?l.cur, "mul")) { ret op.OP_MUL; }
-    if (tok_str_equals(?l.cur, "div")) { ret op.OP_DIV; }
-    if (tok_str_equals(?l.cur, "mod")) { ret op.OP_MOD; }
-    if (tok_str_equals(?l.cur, "divu")) { ret op.OP_DIVU; }
-    if (tok_str_equals(?l.cur, "modu")) { ret op.OP_MODU; }
-    if (tok_str_equals(?l.cur, "and")) { ret op.OP_AND; }
-    if (tok_str_equals(?l.cur, "or")) { ret op.OP_OR; }
-    if (tok_str_equals(?l.cur, "xor")) { ret op.OP_XOR; }
-    if (tok_str_equals(?l.cur, "shl")) { ret op.OP_SHL; }
-    if (tok_str_equals(?l.cur, "shr")) { ret op.OP_SHR; }
-    if (tok_str_equals(?l.cur, "sar")) { ret op.OP_SAR; }
-    if (tok_str_equals(?l.cur, "icmp")) { ret op.OP_ICMP; }
-    if (tok_str_equals(?l.cur, "fcmp")) { ret op.OP_FCMP; }
-    if (tok_str_equals(?l.cur, "jmp")) { ret op.OP_JMP; }
-    if (tok_str_equals(?l.cur, "brcond")) { ret op.OP_BRCOND; }
-    if (tok_str_equals(?l.cur, "call")) { ret op.OP_CALL; }
-    if (tok_str_equals(?l.cur, "ret")) { ret op.OP_RET; }
-    if (tok_str_equals(?l.cur, "zext")) { ret op.OP_ZEXT; }
-    if (tok_str_equals(?l.cur, "sext")) { ret op.OP_SEXT; }
-    if (tok_str_equals(?l.cur, "trunc")) { ret op.OP_TRUNC; }
-    if (tok_str_equals(?l.cur, "itof")) { ret op.OP_ITOF; }
-    if (tok_str_equals(?l.cur, "ftoi")) { ret op.OP_FTOI; }
-    if (tok_str_equals(?l.cur, "fext")) { ret op.OP_FEXT; }
-    if (tok_str_equals(?l.cur, "ftrunc")) { ret op.OP_FTRUNC; }
-    if (tok_str_equals(?l.cur, "fadd")) { ret op.OP_FADD; }
-    if (tok_str_equals(?l.cur, "fsub")) { ret op.OP_FSUB; }
-    if (tok_str_equals(?l.cur, "fmul")) { ret op.OP_FMUL; }
-    if (tok_str_equals(?l.cur, "fdiv")) { ret op.OP_FDIV; }
-    if (tok_str_equals(?l.cur, "syscall")) { ret op.OP_SYSCALL; }
-    if (tok_str_equals(?l.cur, "nop")) { ret op.OP_NOP; }
-    if (tok_str_equals(?l.cur, "memset")) { ret op.OP_MEMSET; }
-    if (tok_str_equals(?l.cur, "param")) { ret op.OP_PARAM; }
-    if (tok_str_equals(?l.cur, "arg")) { ret op.OP_ARG; }
-    if (tok_str_equals(?l.cur, "scarg")) { ret op.OP_SCARG; }
-    if (tok_str_equals(?l.cur, "atomic_load")) { ret op.OP_ATOMIC_LOAD; }
-    if (tok_str_equals(?l.cur, "atomic_store")) { ret op.OP_ATOMIC_STORE; }
-    if (tok_str_equals(?l.cur, "cmpxchg")) { ret op.OP_CMPXCHG; }
-    if (tok_str_equals(?l.cur, "fence")) { ret op.OP_FENCE; }
-    if (tok_str_equals(?l.cur, "atomic_rmw")) { ret op.OP_ATOMIC_RMW; }
+    if (tok_str_equals(?l.cur, "mov")) { lex_next(l); ret op.OP_MOV; }
+    if (tok_str_equals(?l.cur, "load")) { lex_next(l); ret op.OP_LOAD; }
+    if (tok_str_equals(?l.cur, "store")) { lex_next(l); ret op.OP_STORE; }
+    if (tok_str_equals(?l.cur, "addr")) { lex_next(l); ret op.OP_ADDR; }
+    if (tok_str_equals(?l.cur, "add")) { lex_next(l); ret op.OP_ADD; }
+    if (tok_str_equals(?l.cur, "sub")) { lex_next(l); ret op.OP_SUB; }
+    if (tok_str_equals(?l.cur, "mul")) { lex_next(l); ret op.OP_MUL; }
+    if (tok_str_equals(?l.cur, "div")) { lex_next(l); ret op.OP_DIV; }
+    if (tok_str_equals(?l.cur, "and")) { lex_next(l); ret op.OP_AND; }
+    if (tok_str_equals(?l.cur, "or")) { lex_next(l); ret op.OP_OR; }
+    if (tok_str_equals(?l.cur, "xor")) { lex_next(l); ret op.OP_XOR; }
+    if (tok_str_equals(?l.cur, "shl")) { lex_next(l); ret op.OP_SHL; }
+    if (tok_str_equals(?l.cur, "shr")) { lex_next(l); ret op.OP_SHR; }
+    if (tok_str_equals(?l.cur, "cmp")) { lex_next(l); ret op.OP_CMP; }
+    if (tok_str_equals(?l.cur, "jmp")) { lex_next(l); ret op.OP_JMP; }
+    if (tok_str_equals(?l.cur, "branch")) { lex_next(l); ret op.OP_BRANCH; }
+    if (tok_str_equals(?l.cur, "call")) { lex_next(l); ret op.OP_CALL; }
+    if (tok_str_equals(?l.cur, "ret")) { lex_next(l); ret op.OP_RET; }
+    if (tok_str_equals(?l.cur, "conv")) { lex_next(l); ret op.OP_CONV; }
+    if (tok_str_equals(?l.cur, "label")) { lex_next(l); ret op.OP_LABEL; }
+    if (tok_str_equals(?l.cur, "syscall")) { lex_next(l); ret op.OP_SYSCALL; }
+    if (tok_str_equals(?l.cur, "arg")) { lex_next(l); ret op.OP_ARG; }
+    if (tok_str_equals(?l.cur, "param")) { lex_next(l); ret op.OP_PARAM; }
+    if (tok_str_equals(?l.cur, "fence")) { lex_next(l); ret op.OP_FENCE; }
+    if (tok_str_equals(?l.cur, "trap")) { lex_next(l); ret op.OP_TRAP; }
+    if (tok_str_equals(?l.cur, "hint")) { lex_next(l); ret op.OP_HINT; }
+    if (tok_str_equals(?l.cur, "atomic")) {
+        lex_next(l);
+        if (l.cur.kind == TOK_DOT_LBL) {
+            if (tok_str_equals(?l.cur, "load")) { lex_next(l); ret op.OP_ATOMIC_LOAD; }
+            if (tok_str_equals(?l.cur, "store")) { lex_next(l); ret op.OP_ATOMIC_STORE; }
+            if (tok_str_equals(?l.cur, "cas")) { lex_next(l); ret op.OP_ATOMIC_CAS; }
+            if (tok_str_equals(?l.cur, "rmw")) { lex_next(l); ret op.OP_ATOMIC_RMW; }
+        }
+        ret 255;
+    }
     ret 255;
 }
 
@@ -495,6 +490,25 @@ fun lookup_rmw(l: *Lexer) u8 {
     if (tok_str_equals(?l.cur, "xor")) { ret op.RMW_XOR; }
     if (tok_str_equals(?l.cur, "xchg")) { ret op.RMW_XCHG; }
     ret op.RMW_ADD;
+}
+
+fun lookup_div_mode(l: *Lexer) u8 {
+    if (tok_str_equals(?l.cur, "rem")) { ret op.DIV_REM; }
+    if (tok_str_equals(?l.cur, "u")) { ret op.DIV_UQUOT; }
+    if (tok_str_equals(?l.cur, "remu")) { ret op.DIV_UREM; }
+    if (tok_str_equals(?l.cur, "f")) { ret op.DIV_FLOAT; }
+    ret 255;
+}
+
+fun lookup_conv_kind(l: *Lexer) u8 {
+    if (tok_str_equals(?l.cur, "zext")) { ret op.CONV_ZEXT; }
+    if (tok_str_equals(?l.cur, "sext")) { ret op.CONV_SEXT; }
+    if (tok_str_equals(?l.cur, "trunc")) { ret op.CONV_TRUNC; }
+    if (tok_str_equals(?l.cur, "itof")) { ret op.CONV_ITOF; }
+    if (tok_str_equals(?l.cur, "ftoi")) { ret op.CONV_FTOI; }
+    if (tok_str_equals(?l.cur, "fext")) { ret op.CONV_FEXT; }
+    if (tok_str_equals(?l.cur, "ftrunc")) { ret op.CONV_FTRUNC; }
+    ret 255;
 }
 
 fun parse_size_suffix(l: *Lexer) u8 {
@@ -626,15 +640,24 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
                blk: *fn.Block) Result[bool, str] {
     val o: u8 = lookup_op(l);
     if (o == 255) {
-        lex_next(l);
         for (l.cur.kind != TOK_NEWLINE && l.cur.kind != TOK_EOF) { lex_next(l); }
         expect_newline(l);
         ret ok[bool, str](true);
     }
-    lex_next(l);
 
-    if (o == op.OP_NOP) {
-        fn.block_append(alloc, blk, inst.make_nop());
+    if (o == op.OP_TRAP) {
+        fn.block_append(alloc, blk, inst.make_trap());
+        expect_newline(l);
+        ret ok[bool, str](true);
+    }
+
+    if (o == op.OP_HINT) {
+        var kind: u8 = op.HINT_PAUSE;
+        if (l.cur.kind == TOK_DOT_LBL) {
+            if (tok_str_equals(?l.cur, "pause")) { kind = op.HINT_PAUSE; }
+            lex_next(l);
+        }
+        fn.block_append(alloc, blk, inst.make_hint(kind));
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -664,7 +687,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         ret ok[bool, str](true);
     }
 
-    if (o == op.OP_BRCOND) {
+    if (o == op.OP_BRANCH) {
         var cc: u8 = op.CC_NONE;
         if (l.cur.kind == TOK_DOT_LBL) {
             cc = lookup_cc(l);
@@ -675,7 +698,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         val cond: u16 = parse_reg(l);
         expect_comma(l);
         val lbl: u16 = parse_label_ref(alloc, l, f);
-        fn.block_append(alloc, blk, inst.make_brcond(cond, lbl, cc));
+        fn.block_append(alloc, blk, inst.make_branch(cond, lbl, cc));
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -817,11 +840,21 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         ret ok[bool, str](true);
     }
 
-    if (o == op.OP_ICMP || o == op.OP_FCMP) {
+    if (o == op.OP_CMP) {
+        var is_float: bool = false;
         var cc: u8 = op.CC_NONE;
         if (l.cur.kind == TOK_DOT_LBL) {
-            cc = lookup_cc(l);
-            if (cc != op.CC_NONE) { lex_next(l); }
+            if (tok_str_equals(?l.cur, "f")) {
+                is_float = true;
+                lex_next(l);
+                if (l.cur.kind == TOK_DOT_LBL) {
+                    cc = lookup_cc(l);
+                    if (cc != op.CC_NONE) { lex_next(l); }
+                }
+            } or {
+                cc = lookup_cc(l);
+                if (cc != op.CC_NONE) { lex_next(l); }
+            }
         }
         val sz: u8 = parse_size_suffix(l);
         val dst: u16 = parse_reg(l);
@@ -829,33 +862,98 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         val src1: u16 = parse_reg(l);
         expect_comma(l);
         val src2: u16 = parse_reg(l);
-        fn.block_append(alloc, blk, inst.make_cmp(o, dst, src1, src2, cc, sz));
-        expect_newline(l);
-        ret ok[bool, str](true);
-    }
-
-    if (o == op.OP_FTOI) {
-        val sz: u8 = parse_size_suffix(l);
-        val dst: u16 = parse_reg(l);
-        expect_comma(l);
-        val src: u16 = parse_reg(l);
-        expect_comma(l);
-        var src_float_size: u8 = 8;
-        if (l.cur.kind == TOK_INT) {
-            src_float_size = l.cur.ival::u8;
-            lex_next(l);
+        if (is_float) {
+            fn.block_append(alloc, blk, inst.make_cmp_float(dst, src1, src2, cc, sz));
+        } or {
+            fn.block_append(alloc, blk, inst.make_cmp(dst, src1, src2, cc, sz));
         }
-        fn.block_append(alloc, blk, inst.make_ftoi(dst, src, sz, src_float_size));
         expect_newline(l);
         ret ok[bool, str](true);
     }
 
-    if (o >= op.OP_ZEXT && o <= op.OP_FTRUNC && o != op.OP_FTOI) {
+    if (o == op.OP_CONV) {
+        var kind: u8 = op.CONV_ZEXT;
+        if (l.cur.kind == TOK_DOT_LBL) {
+            val k: u8 = lookup_conv_kind(l);
+            if (k != 255) {
+                kind = k;
+                lex_next(l);
+            }
+        }
         val sz: u8 = parse_size_suffix(l);
         val dst: u16 = parse_reg(l);
         expect_comma(l);
         val src: u16 = parse_reg(l);
-        fn.block_append(alloc, blk, inst.make_unary(o, dst, src, sz));
+        if (kind == op.CONV_FTOI) {
+            var src_float_size: u8 = 8;
+            if (l.cur.kind == TOK_COMMA) {
+                expect_comma(l);
+                if (l.cur.kind == TOK_INT) {
+                    src_float_size = l.cur.ival::u8;
+                    lex_next(l);
+                }
+            }
+            fn.block_append(alloc, blk, inst.make_conv_ftoi(dst, src, sz, src_float_size));
+        } or {
+            fn.block_append(alloc, blk, inst.make_conv(dst, src, kind, sz));
+        }
+        expect_newline(l);
+        ret ok[bool, str](true);
+    }
+
+    if (o == op.OP_DIV) {
+        var mode: u8 = op.DIV_QUOT;
+        if (l.cur.kind == TOK_DOT_LBL) {
+            val m: u8 = lookup_div_mode(l);
+            if (m != 255) {
+                mode = m;
+                lex_next(l);
+            }
+        }
+        val sz: u8 = parse_size_suffix(l);
+        val dst: u16 = parse_reg(l);
+        expect_comma(l);
+        val src1: u16 = parse_reg(l);
+        expect_comma(l);
+        if (l.cur.kind == TOK_INT) {
+            val imm: u64 = l.cur.ival::u64;
+            lex_next(l);
+            val ci: i32 = pool.const_intern(alloc, ?f.const_pool, imm);
+            var i: inst.Instruction = inst.make_div(dst, src1, ci::u16, mode, sz);
+            i.meta = i.meta | 1;
+            fn.block_append(alloc, blk, i);
+        } or {
+            val src2: u16 = parse_reg(l);
+            fn.block_append(alloc, blk, inst.make_div(dst, src1, src2, mode, sz));
+        }
+        expect_newline(l);
+        ret ok[bool, str](true);
+    }
+
+    if (o == op.OP_SHR) {
+        var mode: u8 = op.SHR_LOGICAL;
+        if (l.cur.kind == TOK_DOT_LBL) {
+            if (tok_str_equals(?l.cur, "a")) {
+                mode = op.SHR_ARITHMETIC;
+                lex_next(l);
+            }
+        }
+        val sz: u8 = parse_size_suffix(l);
+        val dst: u16 = parse_reg(l);
+        expect_comma(l);
+        val src1: u16 = parse_reg(l);
+        expect_comma(l);
+        if (l.cur.kind == TOK_INT) {
+            val imm: u64 = l.cur.ival::u64;
+            lex_next(l);
+            val ci: i32 = pool.const_intern(alloc, ?f.const_pool, imm);
+            var i: inst.Instruction = inst.make_shr(dst, src1, ci::u16, mode, sz);
+            i.meta = i.meta | 1;
+            fn.block_append(alloc, blk, i);
+        } or {
+            val src2: u16 = parse_reg(l);
+            fn.block_append(alloc, blk, inst.make_shr(dst, src1, src2, mode, sz));
+        }
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -885,6 +983,11 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
     }
 
     if (o == op.OP_ARG) {
+        var is_sc: bool = false;
+        if (l.cur.kind == TOK_DOT_LBL && tok_str_equals(?l.cur, "sc")) {
+            is_sc = true;
+            lex_next(l);
+        }
         val sz: u8 = parse_size_suffix(l);
         var arg_idx: u16 = 0;
         if (l.cur.kind == TOK_ARG) {
@@ -893,27 +996,17 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         }
         expect_comma(l);
         val value_reg: u16 = parse_reg(l);
-        expect_comma(l);
-        var td_idx: u16 = 0;
-        if (l.cur.kind == TOK_TD) {
-            td_idx = l.cur.ival::u16;
-            lex_next(l);
+        if (is_sc) {
+            fn.block_append(alloc, blk, inst.make_scarg(arg_idx::u8, value_reg, sz));
+        } or {
+            expect_comma(l);
+            var td_idx: u16 = 0;
+            if (l.cur.kind == TOK_TD) {
+                td_idx = l.cur.ival::u16;
+                lex_next(l);
+            }
+            fn.block_append(alloc, blk, inst.make_arg(arg_idx::u8, value_reg, td_idx, sz));
         }
-        fn.block_append(alloc, blk, inst.make_arg(arg_idx::u8, value_reg, td_idx, sz));
-        expect_newline(l);
-        ret ok[bool, str](true);
-    }
-
-    if (o == op.OP_SCARG) {
-        val sz: u8 = parse_size_suffix(l);
-        var arg_idx: u16 = 0;
-        if (l.cur.kind == TOK_ARG) {
-            arg_idx = l.cur.ival::u16;
-            lex_next(l);
-        }
-        expect_comma(l);
-        val value_reg: u16 = parse_reg(l);
-        fn.block_append(alloc, blk, inst.make_scarg(arg_idx::u8, value_reg, sz));
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -956,7 +1049,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         ret ok[bool, str](true);
     }
 
-    if (o == op.OP_CMPXCHG) {
+    if (o == op.OP_ATOMIC_CAS) {
         var mo: u8 = op.MO_SEQ_CST;
         if (l.cur.kind == TOK_DOT_LBL) {
             mo = lookup_mo(l);
@@ -980,7 +1073,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         @((?packed[2])::*u16) = new_reg;
         @((?packed[4])::*i32) = 0;
         val off: i32 = pool.data_intern(alloc, ?f.data_pool, ?packed[0], 8);
-        fn.block_append(alloc, blk, inst.make_cmpxchg(result_reg, base, off::u16, sz, mo));
+        fn.block_append(alloc, blk, inst.make_atomic_cas(result_reg, base, off::u16, sz, mo));
         expect_newline(l);
         ret ok[bool, str](true);
     }
@@ -1018,6 +1111,34 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         ret ok[bool, str](true);
     }
 
+    if (o == op.OP_ADD || o == op.OP_SUB || o == op.OP_MUL) {
+        var is_float: bool = false;
+        if (l.cur.kind == TOK_DOT_LBL && tok_str_equals(?l.cur, "f")) {
+            is_float = true;
+            lex_next(l);
+        }
+        val sz: u8 = parse_size_suffix(l);
+        val dst: u16 = parse_reg(l);
+        expect_comma(l);
+        val src1: u16 = parse_reg(l);
+        expect_comma(l);
+        if (l.cur.kind == TOK_INT) {
+            val imm: u64 = l.cur.ival::u64;
+            lex_next(l);
+            val ci: i32 = pool.const_intern(alloc, ?f.const_pool, imm);
+            fn.block_append(alloc, blk, inst.make_alu_imm(o, dst, src1, ci::u16, sz));
+        } or {
+            val src2: u16 = parse_reg(l);
+            if (is_float) {
+                fn.block_append(alloc, blk, inst.make_alu_float(o, dst, src1, src2, sz));
+            } or {
+                fn.block_append(alloc, blk, inst.make_alu(o, dst, src1, src2, sz));
+            }
+        }
+        expect_newline(l);
+        ret ok[bool, str](true);
+    }
+
     val sz: u8 = parse_size_suffix(l);
     val dst: u16 = parse_reg(l);
     expect_comma(l);
@@ -1050,7 +1171,6 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
         ret err[*fn.Function, str]("expected function name");
     }
 
-    # skip legacy (N params) syntax
     if (l.cur.kind == TOK_LPAREN) {
         lex_next(l);
         if (l.cur.kind == TOK_INT) { lex_next(l); }
@@ -1060,7 +1180,6 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
 
     var flags: u16 = 0;
 
-    # named attributes
     for (l.cur.kind == TOK_IDENT) {
         if (tok_str_equals(?l.cur, "variadic")) {
             flags = flags | fn.FUNC_VARIADIC;
@@ -1073,7 +1192,6 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
         }
     }
 
-    # skip legacy flags=N syntax
     if (tok_str_equals(?l.cur, "flags")) {
         lex_next(l);
         if (l.cur.kind == TOK_EQ) { lex_next(l); }
