@@ -34,7 +34,7 @@ pub val MAGIC_0: u8 = 77;
 pub val MAGIC_1: u8 = 65;
 pub val MAGIC_2: u8 = 83;
 pub val MAGIC_3: u8 = 77;
-pub val FORMAT_VERSION: u16 = 1;
+pub val FORMAT_VERSION: u16 = 2;
 
 val TARGET_UNRESOLVED: u32 = 0xFFFFFFFF;
 
