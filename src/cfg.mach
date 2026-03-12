@@ -534,6 +534,295 @@ pub fun dom_dnit(alloc: *allocator.Allocator, dom: *DomInfo) {
     dom.block_count = 0;
 }
 
+# bitset for register liveness
+# ---
+# bits:       packed u64 words, one bit per register ID
+# word_count: number of u64 words (ceil(max_reg / 64))
+pub rec RegSet {
+    bits:       *u64;
+    word_count: u16;
+}
+
+# per-block live-in and live-out register sets
+# ---
+# live_in:  registers live at block entry
+# live_out: registers live at block exit
+# count:    number of blocks (== cfg.block_count)
+pub rec LiveSets {
+    live_in:  *RegSet;
+    live_out: *RegSet;
+    count:    u16;
+}
+
+fun regset_alloc(alloc: *allocator.Allocator, wc: u16) RegSet {
+    var s: RegSet;
+    s.bits = nil;
+    s.word_count = wc;
+    if (wc == 0) { ret s; }
+    val r: Result[*u64, allocator.AllocError] =
+        allocator.allocator_resize[u64](alloc, nil, 0, wc::usize);
+    if (result_is_err[*u64, allocator.AllocError](r)) { ret s; }
+    s.bits = result_unwrap_ok[*u64, allocator.AllocError](r);
+    var i: u16 = 0;
+    for (i < wc) { s.bits[i] = 0; i = i + 1; }
+    ret s;
+}
+
+fun regset_free(alloc: *allocator.Allocator, s: *RegSet) {
+    if (s.bits != nil) {
+        allocator.allocator_free[u64](alloc, s.bits, s.word_count::usize);
+        s.bits = nil;
+    }
+}
+
+fun regset_set(s: *RegSet, reg: u16) {
+    val w: u16 = reg / 64;
+    val b: u16 = reg & 63;
+    if (w < s.word_count) {
+        s.bits[w] = s.bits[w] | (1::u64 << (b::u64));
+    }
+}
+
+fun regset_test(s: *RegSet, reg: u16) bool {
+    val w: u16 = reg / 64;
+    val b: u16 = reg & 63;
+    if (w >= s.word_count) { ret false; }
+    ret (s.bits[w] & (1::u64 << (b::u64))) != 0;
+}
+
+fun regset_or(dst: *RegSet, src: *RegSet) {
+    var i: u16 = 0;
+    for (i < dst.word_count) {
+        dst.bits[i] = dst.bits[i] | src.bits[i];
+        i = i + 1;
+    }
+}
+
+# compute live_in = use | (live_out & ~def) without bitwise NOT
+# uses identity: a & ~b = a ^ (a & b)
+fun regset_update_live_in(live_in: *RegSet, use_set: *RegSet,
+                          live_out: *RegSet, def_set: *RegSet) bool {
+    var changed: bool = false;
+    var i: u16 = 0;
+    for (i < live_in.word_count) {
+        val masked: u64 = live_out.bits[i] & def_set.bits[i];
+        val propagated: u64 = live_out.bits[i] ^ masked;
+        val new_val: u64 = use_set.bits[i] | propagated;
+        if (new_val != live_in.bits[i]) {
+            live_in.bits[i] = new_val;
+            changed = true;
+        }
+        i = i + 1;
+    }
+    ret changed;
+}
+
+fun find_max_reg(cfg: *CFG) u16 {
+    var max_reg: u16 = 0;
+    var bi: u16 = 0;
+    for (bi < cfg.block_count) {
+        val blk: *fn.Block = cfg.blocks[bi].block;
+        if (blk == nil) { bi = bi + 1; cnt; }
+        var ii: i32 = 0;
+        for (ii < blk.inst_count) {
+            val ins: *inst.Instruction = ?blk.insts[ii];
+            val o: u8 = ins.op;
+            # skip opcodes with no register operands
+            if (o != op.OP_JMP && o != op.OP_LABEL && o != op.OP_FENCE &&
+                o != op.OP_TRAP && o != op.OP_HINT && o != op.OP_PARAM) {
+                if (ins.f0 > max_reg) { max_reg = ins.f0; }
+            }
+            # f1 is a register for memory, ALU, CONV, ARG, atomics, indirect CALL
+            if ((o >= op.OP_MOV && o <= op.OP_CMP) || o == op.OP_CONV ||
+                o == op.OP_ARG || (o >= op.OP_ATOMIC_LOAD && o <= op.OP_ATOMIC_RMW)) {
+                if (ins.f1 > max_reg) { max_reg = ins.f1; }
+            }
+            if (o == op.OP_CALL && inst.flag(ins) == 1) {
+                if (ins.f1 > max_reg) { max_reg = ins.f1; }
+            }
+            # f2 is a register only for ALU/CMP (opcodes 4-13) when flag=0
+            if (o >= op.OP_ADD && o <= op.OP_CMP && inst.flag(ins) == 0) {
+                if (ins.f2 > max_reg) { max_reg = ins.f2; }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ret max_reg;
+}
+
+# classify instruction operands and update per-block def/use sets
+fun compute_block_def_use(blk: *fn.Block, def_set: *RegSet, use_set: *RegSet) {
+    if (blk == nil) { ret; }
+    var ii: i32 = 0;
+    for (ii < blk.inst_count) {
+        val ins: *inst.Instruction = ?blk.insts[ii];
+        val o: u8 = ins.op;
+
+        var r0: bool = false;
+        var r1: bool = false;
+        var r2: bool = false;
+        var w0: bool = false;
+
+        if (o >= op.OP_ADD && o <= op.OP_CMP) {
+            w0 = true; r1 = true;
+            if (inst.flag(ins) == 0) { r2 = true; }
+        }
+        if (o == op.OP_MOV) {
+            w0 = true;
+            if (inst.cc(ins) == 0 && inst.flag(ins) == 0) { r1 = true; }
+        }
+        if (o == op.OP_LOAD || o == op.OP_ATOMIC_LOAD) { w0 = true; r1 = true; }
+        if (o == op.OP_STORE || o == op.OP_ATOMIC_STORE) { r0 = true; r1 = true; }
+        if (o == op.OP_ADDR) { w0 = true; r1 = true; }
+        if (o == op.OP_CONV) { w0 = true; r1 = true; }
+        if (o == op.OP_BRANCH) { r0 = true; }
+        if (o == op.OP_CALL) { w0 = true; if (inst.flag(ins) == 1) { r1 = true; } }
+        if (o == op.OP_RET && inst.size(ins) > 1) { r0 = true; }
+        if (o == op.OP_SYSCALL) { w0 = true; }
+        if (o == op.OP_ARG) { r1 = true; }
+        if (o == op.OP_ATOMIC_CAS || o == op.OP_ATOMIC_RMW) { w0 = true; r1 = true; }
+
+        # reads before writes: use if not already defined
+        if (r0 && regset_test(def_set, ins.f0) == false) { regset_set(use_set, ins.f0); }
+        if (r1 && regset_test(def_set, ins.f1) == false) { regset_set(use_set, ins.f1); }
+        if (r2 && regset_test(def_set, ins.f2) == false) { regset_set(use_set, ins.f2); }
+        if (w0) { regset_set(def_set, ins.f0); }
+
+        ii = ii + 1;
+    }
+}
+
+# compute_liveness: backward dataflow liveness analysis
+# ---
+# alloc: allocator for all liveness data structures
+# cfg:   pointer to CFG (must outlive LiveSets)
+# func:  pointer to function (reserved for future pool resolution)
+# ret:   per-block live-in and live-out register sets
+pub fun compute_liveness(alloc: *allocator.Allocator, cfg: *CFG,
+                         func: *fn.Function) LiveSets {
+    var ls: LiveSets;
+    ls.live_in = nil;
+    ls.live_out = nil;
+    ls.count = 0;
+
+    if (alloc == nil || cfg == nil || cfg.block_count == 0) { ret ls; }
+
+    val n: u16 = cfg.block_count;
+    val max_reg: u16 = find_max_reg(cfg);
+    val wc: u16 = (max_reg / 64) + 1;
+
+    val li_r: Result[*RegSet, allocator.AllocError] =
+        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
+    if (result_is_err[*RegSet, allocator.AllocError](li_r)) { ret ls; }
+    ls.live_in = result_unwrap_ok[*RegSet, allocator.AllocError](li_r);
+
+    val lo_r: Result[*RegSet, allocator.AllocError] =
+        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
+    if (result_is_err[*RegSet, allocator.AllocError](lo_r)) { ret ls; }
+    ls.live_out = result_unwrap_ok[*RegSet, allocator.AllocError](lo_r);
+    ls.count = n;
+
+    val dr: Result[*RegSet, allocator.AllocError] =
+        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
+    if (result_is_err[*RegSet, allocator.AllocError](dr)) { ret ls; }
+    var def_sets: *RegSet = result_unwrap_ok[*RegSet, allocator.AllocError](dr);
+
+    val ur: Result[*RegSet, allocator.AllocError] =
+        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
+    if (result_is_err[*RegSet, allocator.AllocError](ur)) { ret ls; }
+    var use_sets: *RegSet = result_unwrap_ok[*RegSet, allocator.AllocError](ur);
+
+    var i: u16 = 0;
+    for (i < n) {
+        ls.live_in[i] = regset_alloc(alloc, wc);
+        ls.live_out[i] = regset_alloc(alloc, wc);
+        def_sets[i] = regset_alloc(alloc, wc);
+        use_sets[i] = regset_alloc(alloc, wc);
+        compute_block_def_use(cfg.blocks[i].block, ?def_sets[i], ?use_sets[i]);
+        i = i + 1;
+    }
+
+    var changed: bool = true;
+    for (changed) {
+        changed = false;
+        var ri: u16 = n;
+        for (ri > 0) {
+            ri = ri - 1;
+
+            var w: u16 = 0;
+            for (w < wc) { ls.live_out[ri].bits[w] = 0; w = w + 1; }
+
+            val bb: *BasicBlock = ?cfg.blocks[ri];
+            var si: u16 = 0;
+            for (si < bb.nsuccs) {
+                regset_or(?ls.live_out[ri], ?ls.live_in[bb.succs[si]]);
+                si = si + 1;
+            }
+
+            val c: bool = regset_update_live_in(
+                ?ls.live_in[ri], ?use_sets[ri], ?ls.live_out[ri], ?def_sets[ri]);
+            if (c) { changed = true; }
+        }
+    }
+
+    i = 0;
+    for (i < n) {
+        regset_free(alloc, ?def_sets[i]);
+        regset_free(alloc, ?use_sets[i]);
+        i = i + 1;
+    }
+    allocator.allocator_free[RegSet](alloc, def_sets, n::usize);
+    allocator.allocator_free[RegSet](alloc, use_sets, n::usize);
+
+    ret ls;
+}
+
+# is_live_in: test whether a register is live at the entry of a block
+# ---
+# sets:  pointer to LiveSets
+# block: block index
+# reg:   register ID
+# ret:   true if reg is in live_in[block]
+pub fun is_live_in(sets: *LiveSets, block: u16, reg: u16) bool {
+    if (sets == nil || sets.live_in == nil || block >= sets.count) { ret false; }
+    ret regset_test(?sets.live_in[block], reg);
+}
+
+# is_live_out: test whether a register is live at the exit of a block
+# ---
+# sets:  pointer to LiveSets
+# block: block index
+# reg:   register ID
+# ret:   true if reg is in live_out[block]
+pub fun is_live_out(sets: *LiveSets, block: u16, reg: u16) bool {
+    if (sets == nil || sets.live_out == nil || block >= sets.count) { ret false; }
+    ret regset_test(?sets.live_out[block], reg);
+}
+
+# live_dnit: free all memory owned by a LiveSets
+# ---
+# alloc: allocator used during compute_liveness
+# sets:  pointer to LiveSets
+pub fun live_dnit(alloc: *allocator.Allocator, sets: *LiveSets) {
+    if (alloc == nil || sets == nil) { ret; }
+    var i: u16 = 0;
+    for (i < sets.count) {
+        if (sets.live_in != nil) { regset_free(alloc, ?sets.live_in[i]); }
+        if (sets.live_out != nil) { regset_free(alloc, ?sets.live_out[i]); }
+        i = i + 1;
+    }
+    if (sets.live_in != nil) {
+        allocator.allocator_free[RegSet](alloc, sets.live_in, sets.count::usize);
+        sets.live_in = nil;
+    }
+    if (sets.live_out != nil) {
+        allocator.allocator_free[RegSet](alloc, sets.live_out, sets.count::usize);
+        sets.live_out = nil;
+    }
+    sets.count = 0;
+}
+
 fun alloc_block(alloc: *allocator.Allocator, label: str) *fn.Block {
     val r: Result[*fn.Block, allocator.AllocError] =
         allocator.allocator_resize[fn.Block](alloc, nil, 0, 1);
@@ -886,6 +1175,64 @@ test "dom: loop header dominates body" {
     if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
 
     dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "live: register live across blocks" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "cross");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_alu(op.OP_ADD, 32, 33, 34, 8));
+    fn.block_append(?a, ba, inst.make_jmp(lb::u16));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_alu(op.OP_ADD, 35, 32, 36, 8));
+    fn.block_append(?a, bb, inst.make_ret_value(35, 0, 8));
+    fn.func_add_block(?f, bb);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var ls: LiveSets = compute_liveness(?a, ?cfg, ?f);
+
+    # r32 live out of A, live in to B
+    if (is_live_out(?ls, 0, 32) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (is_live_in(?ls, 1, 32) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    # r32 not live out of B (consumed)
+    if (is_live_out(?ls, 1, 32)) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    # r33 live in to A (used, not defined before)
+    if (is_live_in(?ls, 0, 33) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    live_dnit(?a, ?ls);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "live: dead def not live" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "dead");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_alu(op.OP_ADD, 32, 33, 34, 8));
+    fn.block_append(?a, ba, inst.make_ret());
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var ls: LiveSets = compute_liveness(?a, ?cfg, ?f);
+
+    # r32 not live (dead def, never used)
+    if (is_live_out(?ls, 0, 32)) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (is_live_in(?ls, 0, 32)) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    # r33 and r34 are live_in (used as sources)
+    if (is_live_in(?ls, 0, 33) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (is_live_in(?ls, 0, 34) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    live_dnit(?a, ?ls);
     cfg_dnit(?a, ?cfg);
     fn.func_dnit(?a, ?f);
     ret 1;
