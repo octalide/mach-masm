@@ -290,6 +290,250 @@ pub fun cfg_dnit(alloc: *allocator.Allocator, cfg: *CFG) {
     cfg.block_count = 0;
 }
 
+val DOM_UNDEF: u16 = 65535;
+
+# dominance information for a CFG
+# ---
+# idom:        immediate dominator: idom[block_id] = dominator block_id
+# rpo:         reverse postorder traversal: rpo[0] = entry
+# rpo_count:   number of blocks in RPO (excludes unreachable)
+# rpo_number:  rpo_number[block_id] = position in rpo[]
+# block_count: total blocks (allocation size for idom/rpo_number)
+pub rec DomInfo {
+    idom:        *u16;
+    rpo:         *u16;
+    rpo_count:   u16;
+    rpo_number:  *u16;
+    block_count: u16;
+}
+
+# iterative DFS to produce reverse postorder
+fun compute_rpo(alloc: *allocator.Allocator, cfg: *CFG,
+                rpo: *u16, rpo_number: *u16) u16 {
+    val n: u16 = cfg.block_count;
+
+    val vr: Result[*u8, allocator.AllocError] =
+        allocator.allocator_resize[u8](alloc, nil, 0, n::usize);
+    if (result_is_err[*u8, allocator.AllocError](vr)) { ret 0; }
+    var visited: *u8 = result_unwrap_ok[*u8, allocator.AllocError](vr);
+
+    val sr: Result[*u16, allocator.AllocError] =
+        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
+    if (result_is_err[*u16, allocator.AllocError](sr)) {
+        allocator.allocator_free[u8](alloc, visited, n::usize);
+        ret 0;
+    }
+    var stack: *u16 = result_unwrap_ok[*u16, allocator.AllocError](sr);
+
+    val ir: Result[*u16, allocator.AllocError] =
+        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
+    if (result_is_err[*u16, allocator.AllocError](ir)) {
+        allocator.allocator_free[u8](alloc, visited, n::usize);
+        allocator.allocator_free[u16](alloc, stack, n::usize);
+        ret 0;
+    }
+    var succ_idx: *u16 = result_unwrap_ok[*u16, allocator.AllocError](ir);
+
+    var i: u16 = 0;
+    for (i < n) {
+        visited[i] = 0;
+        rpo_number[i] = DOM_UNDEF;
+        i = i + 1;
+    }
+
+    stack[0] = cfg.entry;
+    succ_idx[0] = 0;
+    visited[cfg.entry] = 1;
+    var sp: u16 = 1;
+    var po_count: u16 = 0;
+
+    for (sp > 0) {
+        val top: u16 = sp - 1;
+        val bid: u16 = stack[top];
+        val si: u16 = succ_idx[top];
+        val bb: *BasicBlock = ?cfg.blocks[bid];
+
+        if (si < bb.nsuccs) {
+            succ_idx[top] = si + 1;
+            val s: u16 = bb.succs[si];
+            if (visited[s] == 0) {
+                visited[s] = 1;
+                stack[sp] = s;
+                succ_idx[sp] = 0;
+                sp = sp + 1;
+            }
+        } or {
+            rpo[po_count] = bid;
+            po_count = po_count + 1;
+            sp = sp - 1;
+        }
+    }
+
+    if (po_count > 1) {
+        var lo: u16 = 0;
+        var hi: u16 = po_count - 1;
+        for (lo < hi) {
+            val tmp: u16 = rpo[lo];
+            rpo[lo] = rpo[hi];
+            rpo[hi] = tmp;
+            lo = lo + 1;
+            hi = hi - 1;
+        }
+    }
+
+    i = 0;
+    for (i < po_count) {
+        rpo_number[rpo[i]] = i;
+        i = i + 1;
+    }
+
+    allocator.allocator_free[u8](alloc, visited, n::usize);
+    allocator.allocator_free[u16](alloc, stack, n::usize);
+    allocator.allocator_free[u16](alloc, succ_idx, n::usize);
+
+    ret po_count;
+}
+
+# Cooper-Harvey-Kennedy intersect helper
+fun intersect(idom: *u16, rpo_number: *u16, a: u16, b: u16) u16 {
+    var fa: u16 = a;
+    var fb: u16 = b;
+    for (fa != fb) {
+        for (rpo_number[fa] > rpo_number[fb]) {
+            fa = idom[fa];
+        }
+        for (rpo_number[fb] > rpo_number[fa]) {
+            fb = idom[fb];
+        }
+    }
+    ret fa;
+}
+
+# compute_dominance: build immediate dominator tree using CHK algorithm
+# ---
+# alloc: allocator for DomInfo arrays
+# cfg:   pointer to CFG (must outlive DomInfo)
+# ret:   dominance information
+pub fun compute_dominance(alloc: *allocator.Allocator, cfg: *CFG) DomInfo {
+    var dom: DomInfo;
+    dom.idom = nil;
+    dom.rpo = nil;
+    dom.rpo_count = 0;
+    dom.rpo_number = nil;
+    dom.block_count = 0;
+
+    if (alloc == nil || cfg == nil || cfg.block_count == 0) { ret dom; }
+
+    val n: u16 = cfg.block_count;
+    dom.block_count = n;
+
+    val ir: Result[*u16, allocator.AllocError] =
+        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
+    if (result_is_err[*u16, allocator.AllocError](ir)) { ret dom; }
+    dom.idom = result_unwrap_ok[*u16, allocator.AllocError](ir);
+
+    val rr: Result[*u16, allocator.AllocError] =
+        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
+    if (result_is_err[*u16, allocator.AllocError](rr)) { ret dom; }
+    dom.rpo = result_unwrap_ok[*u16, allocator.AllocError](rr);
+
+    val nr: Result[*u16, allocator.AllocError] =
+        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
+    if (result_is_err[*u16, allocator.AllocError](nr)) { ret dom; }
+    dom.rpo_number = result_unwrap_ok[*u16, allocator.AllocError](nr);
+
+    dom.rpo_count = compute_rpo(alloc, cfg, dom.rpo, dom.rpo_number);
+    if (dom.rpo_count == 0) { ret dom; }
+
+    var i: u16 = 0;
+    for (i < n) {
+        dom.idom[i] = DOM_UNDEF;
+        i = i + 1;
+    }
+    dom.idom[cfg.entry] = cfg.entry;
+
+    var changed: bool = true;
+    for (changed) {
+        changed = false;
+        var ri: u16 = 1;
+        for (ri < dom.rpo_count) {
+            val b: u16 = dom.rpo[ri];
+            val bb: *BasicBlock = ?cfg.blocks[b];
+
+            var new_idom: u16 = DOM_UNDEF;
+            var pi: u16 = 0;
+            for (pi < bb.npreds) {
+                val p: u16 = bb.preds[pi];
+                if (dom.idom[p] != DOM_UNDEF) {
+                    new_idom = p;
+                    pi = pi + 1;
+                    brk;
+                }
+                pi = pi + 1;
+            }
+
+            for (pi < bb.npreds) {
+                val p: u16 = bb.preds[pi];
+                if (dom.idom[p] != DOM_UNDEF) {
+                    new_idom = intersect(dom.idom, dom.rpo_number, new_idom, p);
+                }
+                pi = pi + 1;
+            }
+
+            if (new_idom != DOM_UNDEF && dom.idom[b] != new_idom) {
+                dom.idom[b] = new_idom;
+                changed = true;
+            }
+            ri = ri + 1;
+        }
+    }
+
+    ret dom;
+}
+
+# dominates: check whether block a dominates block b
+# ---
+# dom: pointer to DomInfo
+# a:   potential dominator block ID
+# b:   potential dominated block ID
+# ret: true if a dominates b
+pub fun dominates(dom: *DomInfo, a: u16, b: u16) bool {
+    if (dom == nil || dom.idom == nil) { ret false; }
+    if (a == b) { ret true; }
+    if (a >= dom.block_count || b >= dom.block_count) { ret false; }
+    if (dom.idom[b] == DOM_UNDEF) { ret false; }
+    var cur: u16 = b;
+    for (cur != dom.idom[cur]) {
+        cur = dom.idom[cur];
+        if (cur == a) { ret true; }
+        if (dom.idom[cur] == DOM_UNDEF) { ret false; }
+    }
+    ret cur == a;
+}
+
+# dom_dnit: free all memory owned by a DomInfo
+# ---
+# alloc: allocator used during compute_dominance
+# dom:   pointer to DomInfo
+pub fun dom_dnit(alloc: *allocator.Allocator, dom: *DomInfo) {
+    if (alloc == nil || dom == nil) { ret; }
+    val n: usize = dom.block_count::usize;
+    if (dom.idom != nil) {
+        allocator.allocator_free[u16](alloc, dom.idom, n);
+        dom.idom = nil;
+    }
+    if (dom.rpo != nil) {
+        allocator.allocator_free[u16](alloc, dom.rpo, n);
+        dom.rpo = nil;
+    }
+    if (dom.rpo_number != nil) {
+        allocator.allocator_free[u16](alloc, dom.rpo_number, n);
+        dom.rpo_number = nil;
+    }
+    dom.rpo_count = 0;
+    dom.block_count = 0;
+}
+
 fun alloc_block(alloc: *allocator.Allocator, label: str) *fn.Block {
     val r: Result[*fn.Block, allocator.AllocError] =
         allocator.allocator_resize[fn.Block](alloc, nil, 0, 1);
@@ -483,6 +727,165 @@ test "cfg: fallthrough on non-terminator" {
     if (cfg.blocks[0].succs[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
     if (cfg.blocks[1].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
 
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "dom: linear chain A dominates all" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "chain");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_jmp(lb::u16));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(lc::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_ret());
+    fn.func_add_block(?f, bc);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    if (dom.rpo_count != 3) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # A dominates all
+    if (dominates(?dom, 0, 0) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 1) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # B dominates C
+    if (dominates(?dom, 1, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # C does not dominate A or B
+    if (dominates(?dom, 2, 0)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # idom checks
+    if (dom.idom[0] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dom.idom[1] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dom.idom[2] != 1) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "dom: diamond idom converges to entry" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "diamond");
+
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+    val ld: i32 = pool.label_intern(?a, ?f.labels, "d");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_branch(32, lc::u16, op.CC_NE));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bc);
+
+    var bd: *fn.Block = alloc_block(?a, "d");
+    fn.block_append(?a, bd, inst.make_ret());
+    fn.func_add_block(?f, bd);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    # A dominates all
+    if (dominates(?dom, 0, 1) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 3) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # B and C don't dominate each other
+    if (dominates(?dom, 1, 2)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # D's idom is A (both paths merge)
+    if (dom.idom[3] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dom.idom[1] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dom.idom[2] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "dom: single block" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "single");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_ret());
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    if (dom.rpo_count != 1) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dom.idom[0] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 0) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "dom: loop header dominates body" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "loop");
+
+    val lh: i32 = pool.label_intern(?a, ?f.labels, "header");
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "body");
+    val le: i32 = pool.label_intern(?a, ?f.labels, "exit");
+
+    var be: *fn.Block = alloc_block(?a, "entry");
+    fn.block_append(?a, be, inst.make_jmp(lh::u16));
+    fn.func_add_block(?f, be);
+
+    var bh: *fn.Block = alloc_block(?a, "header");
+    fn.block_append(?a, bh, inst.make_branch(32, le::u16, op.CC_EQ));
+    fn.func_add_block(?f, bh);
+
+    var bb: *fn.Block = alloc_block(?a, "body");
+    fn.block_append(?a, bb, inst.make_jmp(lh::u16));
+    fn.func_add_block(?f, bb);
+
+    var bx: *fn.Block = alloc_block(?a, "exit");
+    fn.block_append(?a, bx, inst.make_ret());
+    fn.func_add_block(?f, bx);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    # entry dominates all
+    if (dominates(?dom, 0, 1) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 0, 3) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # header dominates body and exit
+    if (dominates(?dom, 1, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (dominates(?dom, 1, 3) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # body does not dominate header (back edge)
+    if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    dom_dnit(?a, ?dom);
     cfg_dnit(?a, ?cfg);
     fn.func_dnit(?a, ?f);
     ret 1;
