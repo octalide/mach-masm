@@ -1,0 +1,489 @@
+# masm.cfg: control flow graph construction
+#
+# builds a CFG over an existing masm.Function's block array. blocks
+# already exist with labels and instructions — the CFG adds
+# predecessor/successor edges as a parallel data structure.
+
+use std.types.bool;
+use std.types.size;
+use std.types.string;
+use std.types.result;
+
+use allocator: std.allocator;
+use map:       std.collections.map;
+
+use fn:   masm.function;
+use inst:  masm.inst;
+use op:    masm.op;
+use pool:  masm.pool;
+
+# BasicBlock: wraps a masm.Block with CFG edges
+# ---
+# block:  pointer to the masm.Block in Function.blocks
+# id:     block index in Function.blocks
+# preds:  predecessor block IDs (slice into shared edge array)
+# npreds: number of predecessors
+# succs:  successor block IDs (slice into shared edge array)
+# nsuccs: number of successors
+pub rec BasicBlock {
+    block:  *fn.Block;
+    id:     u16;
+    preds:  *u16;
+    npreds: u16;
+    succs:  *u16;
+    nsuccs: u16;
+}
+
+# CFG: control flow graph over a function's blocks
+# ---
+# blocks:      parallel array of BasicBlocks (indexed same as Function.blocks)
+# block_count: number of blocks
+# entry:       entry block ID (always 0)
+pub rec CFG {
+    blocks:      *BasicBlock;
+    block_count: u16;
+    entry:       u16;
+}
+
+# resolve_label: find block index for a label table index
+fun resolve_label(func: *fn.Function, lbl_idx: i32,
+                  label_map: *map.Map[str, i32]) i32 {
+    val name: str = pool.label_get(?func.labels, lbl_idx);
+    if (name == nil) { ret -1; }
+    val r: Result[*i32, str] = map.get[str, i32](label_map, ?name);
+    if (result_is_err[*i32, str](r)) { ret -1; }
+    ret @result_unwrap_ok[*i32, str](r);
+}
+
+# block_successors: compute successors for a block
+#
+# writes successor block IDs to out[0..n] and returns the count.
+# ---
+# func:        pointer to function (for label resolution)
+# blk:         pointer to block
+# block_idx:   index of this block
+# block_count: total number of blocks
+# label_map:   label name -> block index map
+# out:         output buffer (at least 2 entries)
+# ret:         number of successors written
+fun block_successors(func: *fn.Function, blk: *fn.Block, block_idx: u16,
+                     block_count: u16, label_map: *map.Map[str, i32],
+                     out: *u16) u16 {
+    if (blk == nil || blk.inst_count == 0) {
+        if (block_idx + 1 < block_count) {
+            out[0] = block_idx + 1;
+            ret 1;
+        }
+        ret 0;
+    }
+
+    val last: *inst.Instruction = ?blk.insts[blk.inst_count - 1];
+
+    if (last.op == op.OP_JMP) {
+        val target: i32 = resolve_label(func, inst.label_idx(last), label_map);
+        if (target >= 0) {
+            out[0] = target::u16;
+            ret 1;
+        }
+        ret 0;
+    }
+
+    if (last.op == op.OP_BRANCH) {
+        var ns: u16 = 0;
+        val target: i32 = resolve_label(func, inst.label_idx(last), label_map);
+        if (target >= 0) {
+            out[0] = target::u16;
+            ns = 1;
+        }
+        if (block_idx + 1 < block_count) {
+            out[ns] = block_idx + 1;
+            ns = ns + 1;
+        }
+        ret ns;
+    }
+
+    if (last.op == op.OP_RET || last.op == op.OP_TRAP) {
+        ret 0;
+    }
+
+    if (last.op == op.OP_CALL && inst.cc(last) == op.CALL_TAIL) {
+        ret 0;
+    }
+
+    if (block_idx + 1 < block_count) {
+        out[0] = block_idx + 1;
+        ret 1;
+    }
+    ret 0;
+}
+
+# build_cfg: construct a CFG over a function's blocks
+# ---
+# alloc: allocator for CFG memory
+# func:  pointer to function
+# ret:   constructed CFG
+pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
+    var cfg: CFG;
+    cfg.blocks = nil;
+    cfg.block_count = 0;
+    cfg.entry = 0;
+
+    if (func == nil || func.blocks.len == 0) { ret cfg; }
+
+    val n: u16 = func.blocks.len::u16;
+    cfg.block_count = n;
+
+    val br: Result[*BasicBlock, allocator.AllocError] =
+        allocator.allocator_resize[BasicBlock](alloc, nil, 0, n::usize);
+    if (result_is_err[*BasicBlock, allocator.AllocError](br)) { ret cfg; }
+    cfg.blocks = result_unwrap_ok[*BasicBlock, allocator.AllocError](br);
+
+    var label_map: map.Map[str, i32] = map.init[str, i32](alloc, map.hash_str, map.eq_str);
+    var i: u16 = 0;
+    for (i < n) {
+        val blk: *fn.Block = func.blocks.data[i::usize];
+        if (blk != nil && blk.label != nil) {
+            map.insert[str, i32](?label_map, blk.label, i::i32);
+        }
+        i = i + 1;
+    }
+
+    val tmp_r: Result[*u16, allocator.AllocError] =
+        allocator.allocator_resize[u16](alloc, nil, 0, (n::usize) * 2);
+    if (result_is_err[*u16, allocator.AllocError](tmp_r)) {
+        map.dnit[str, i32](?label_map);
+        ret cfg;
+    }
+    var tmp_succ: *u16 = result_unwrap_ok[*u16, allocator.AllocError](tmp_r);
+
+    var total_edges: usize = 0;
+    i = 0;
+    for (i < n) {
+        val blk: *fn.Block = func.blocks.data[i::usize];
+        cfg.blocks[i].block = blk;
+        cfg.blocks[i].id = i;
+        cfg.blocks[i].preds = nil;
+        cfg.blocks[i].npreds = 0;
+        cfg.blocks[i].succs = nil;
+        cfg.blocks[i].nsuccs = 0;
+
+        val base: usize = (i::usize) * 2;
+        val ns: u16 = block_successors(func, blk, i, n, ?label_map, ?tmp_succ[base]);
+        cfg.blocks[i].nsuccs = ns;
+        total_edges = total_edges + ns::usize;
+        i = i + 1;
+    }
+
+    if (total_edges > 0) {
+        val sr: Result[*u16, allocator.AllocError] =
+            allocator.allocator_resize[u16](alloc, nil, 0, total_edges);
+        if (result_is_ok[*u16, allocator.AllocError](sr)) {
+            var succ_edges: *u16 = result_unwrap_ok[*u16, allocator.AllocError](sr);
+            var offset: usize = 0;
+            i = 0;
+            for (i < n) {
+                val ns: u16 = cfg.blocks[i].nsuccs;
+                if (ns > 0) {
+                    cfg.blocks[i].succs = ?succ_edges[offset];
+                    val base: usize = (i::usize) * 2;
+                    var j: u16 = 0;
+                    for (j < ns) {
+                        succ_edges[offset + j::usize] = tmp_succ[base + j::usize];
+                        j = j + 1;
+                    }
+                    offset = offset + ns::usize;
+                }
+                i = i + 1;
+            }
+        }
+
+        i = 0;
+        for (i < n) {
+            var j: u16 = 0;
+            for (j < cfg.blocks[i].nsuccs) {
+                val s: u16 = cfg.blocks[i].succs[j];
+                if (s < n) {
+                    cfg.blocks[s].npreds = cfg.blocks[s].npreds + 1;
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+
+        val pr: Result[*u16, allocator.AllocError] =
+            allocator.allocator_resize[u16](alloc, nil, 0, total_edges);
+        if (result_is_ok[*u16, allocator.AllocError](pr)) {
+            var pred_edges: *u16 = result_unwrap_ok[*u16, allocator.AllocError](pr);
+            var offset: usize = 0;
+            i = 0;
+            for (i < n) {
+                if (cfg.blocks[i].npreds > 0) {
+                    cfg.blocks[i].preds = ?pred_edges[offset];
+                    offset = offset + cfg.blocks[i].npreds::usize;
+                }
+                i = i + 1;
+            }
+
+            i = 0;
+            for (i < n) {
+                cfg.blocks[i].npreds = 0;
+                i = i + 1;
+            }
+
+            i = 0;
+            for (i < n) {
+                var j: u16 = 0;
+                for (j < cfg.blocks[i].nsuccs) {
+                    val s: u16 = cfg.blocks[i].succs[j];
+                    if (s < n) {
+                        val wi: u16 = cfg.blocks[s].npreds;
+                        cfg.blocks[s].preds[wi] = i;
+                        cfg.blocks[s].npreds = wi + 1;
+                    }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+        }
+    }
+
+    allocator.allocator_free[u16](alloc, tmp_succ, (n::usize) * 2);
+    map.dnit[str, i32](?label_map);
+
+    ret cfg;
+}
+
+# cfg_dnit: free all memory owned by a CFG
+# ---
+# alloc: allocator used during build_cfg
+# cfg:   pointer to CFG
+pub fun cfg_dnit(alloc: *allocator.Allocator, cfg: *CFG) {
+    if (alloc == nil || cfg == nil || cfg.blocks == nil) { ret; }
+
+    var succ_base: *u16 = nil;
+    var pred_base: *u16 = nil;
+    var total_succ: usize = 0;
+    var total_pred: usize = 0;
+
+    var i: u16 = 0;
+    for (i < cfg.block_count) {
+        if (cfg.blocks[i].succs != nil && succ_base == nil) {
+            succ_base = cfg.blocks[i].succs;
+        }
+        if (cfg.blocks[i].preds != nil && pred_base == nil) {
+            pred_base = cfg.blocks[i].preds;
+        }
+        total_succ = total_succ + cfg.blocks[i].nsuccs::usize;
+        total_pred = total_pred + cfg.blocks[i].npreds::usize;
+        i = i + 1;
+    }
+
+    if (succ_base != nil) {
+        allocator.allocator_free[u16](alloc, succ_base, total_succ);
+    }
+    if (pred_base != nil) {
+        allocator.allocator_free[u16](alloc, pred_base, total_pred);
+    }
+
+    allocator.allocator_free[BasicBlock](alloc, cfg.blocks, cfg.block_count::usize);
+    cfg.blocks = nil;
+    cfg.block_count = 0;
+}
+
+fun alloc_block(alloc: *allocator.Allocator, label: str) *fn.Block {
+    val r: Result[*fn.Block, allocator.AllocError] =
+        allocator.allocator_resize[fn.Block](alloc, nil, 0, 1);
+    if (result_is_err[*fn.Block, allocator.AllocError](r)) { ret nil; }
+    var blk: *fn.Block = result_unwrap_ok[*fn.Block, allocator.AllocError](r);
+    @blk = fn.block_init(label);
+    ret blk;
+}
+
+test "cfg: empty function produces empty CFG" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "empty");
+    var cfg: CFG = build_cfg(?a, ?f);
+    fn.func_dnit(?a, ?f);
+    if (cfg.block_count != 0) { ret 0; }
+    if (cfg.blocks != nil) { ret 0; }
+    ret 1;
+}
+
+test "cfg: linear chain A->B->C" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "chain");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_jmp(lb::u16));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(lc::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_ret());
+    fn.func_add_block(?f, bc);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 3) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # A: 0 preds, 1 succ (B)
+    if (cfg.blocks[0].npreds != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].succs[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # B: 1 pred (A), 1 succ (C)
+    if (cfg.blocks[1].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[1].preds[0] != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[1].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[1].succs[0] != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # C: 1 pred (B), 0 succs
+    if (cfg.blocks[2].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[2].preds[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[2].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "cfg: diamond branch A->{B,C}->D" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "diamond");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+    val ld: i32 = pool.label_intern(?a, ?f.labels, "d");
+
+    # A: branch to B, fall through to C (block index 1=C because B is at index 2)
+    # actually let me order: A=0, B=1, C=2, D=3
+    # A branches to C (index 2), falls through to B (index 1)
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_branch(32, lc::u16, op.CC_NE));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bc);
+
+    var bd: *fn.Block = alloc_block(?a, "d");
+    fn.block_append(?a, bd, inst.make_ret());
+    fn.func_add_block(?f, bd);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 4) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # A: 0 preds, 2 succs (C=2, B=1 fallthrough)
+    if (cfg.blocks[0].npreds != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].nsuccs != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    # D: 2 preds (B and C), 0 succs
+    if (cfg.blocks[3].npreds != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[3].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "cfg: self-loop" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "loop");
+
+    val la: i32 = pool.label_intern(?a, ?f.labels, "a");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_jmp(la::u16));
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].succs[0] != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].preds[0] != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "cfg: tail call has no successors" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "tail");
+
+    val lt: i32 = pool.label_intern(?a, ?f.labels, "target");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_call_direct(32, lt::u16, true, 8));
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "cfg: trap has no successors" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "trap");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_trap());
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_ret());
+    fn.func_add_block(?f, bb);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[1].npreds != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
+
+test "cfg: fallthrough on non-terminator" {
+    var a: allocator.Allocator = allocator.default();
+    var f: fn.Function = fn.func_init(?a, "fall");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_alu(op.OP_ADD, 32, 33, 34, 8));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_ret());
+    fn.func_add_block(?f, bb);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[0].succs[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+    if (cfg.blocks[1].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 0; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 1;
+}
