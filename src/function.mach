@@ -59,8 +59,6 @@ pub rec Block {
 # blocks:         vector of block pointers
 # param_count:    number of parameters
 # flags:          function-level flags (FUNC_VARIADIC, FUNC_NORETURN)
-# local_size:     total local variable stack allocation (bytes)
-# call_area_size: maximum outgoing call argument stack space (bytes)
 # const_pool:     per-function 64-bit constant pool
 # labels:         per-function label name table
 # data_pool:      per-function metadata byte pool
@@ -70,8 +68,6 @@ pub rec Function {
     blocks:         vec.Vector[*Block];
     param_count:    i32;
     flags:          u16;
-    local_size:     usize;
-    call_area_size: usize;
     const_pool:     pool.ConstPool;
     labels:         pool.LabelTable;
     data_pool:      pool.DataPool;
@@ -189,8 +185,6 @@ pub fun func_init(alloc: *allocator.Allocator, name: str) Function {
     f.blocks = vec.init[*Block](alloc);
     f.param_count = 0;
     f.flags = 0;
-    f.local_size = 0;
-    f.call_area_size = 0;
     f.const_pool = pool.const_init(alloc);
     f.labels = pool.label_init(alloc);
     f.data_pool = pool.data_init(alloc);
