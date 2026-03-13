@@ -97,6 +97,11 @@ pub val OP_HINT:    Operator = 29;
 
 pub val OP_COUNT: u8 = 30;
 
+# canonical opcode range boundary: all opcodes <= OP_CANONICAL_MAX are
+# part of the MASM IR spec. compiler-internal extensions must use values
+# strictly above this.
+pub val OP_CANONICAL_MAX: Operator = 29;
+
 # condition codes (stored in meta cc field for cmp and branch)
 pub val CC_NONE: Cond = 0;
 pub val CC_EQ:   Cond = 1;
