@@ -81,8 +81,8 @@ pub fun init(alloc: *allocator.Allocator) TypeDescTable {
 pub fun intern(tbl: *TypeDescTable, desc: TypeDesc) i32 {
     if (tbl == nil) { ret -1; }
     val r: Result[usize, str] = vec.push[TypeDesc](?tbl.descs, desc);
-    if (result_is_err[usize, str](r)) { ret -1; }
-    ret (result_unwrap_ok[usize, str](r) - 1)::i32;
+    if (is_err[usize, str](r)) { ret -1; }
+    ret (unwrap_ok[usize, str](r) - 1)::i32;
 }
 
 # get: retrieve a type descriptor by index
@@ -93,8 +93,8 @@ pub fun intern(tbl: *TypeDescTable, desc: TypeDesc) i32 {
 pub fun get(tbl: *TypeDescTable, idx: i32) *TypeDesc {
     if (tbl == nil || idx < 0) { ret nil; }
     val r: Result[*TypeDesc, str] = vec.get[TypeDesc](?tbl.descs, idx::usize);
-    if (result_is_err[*TypeDesc, str](r)) { ret nil; }
-    ret result_unwrap_ok[*TypeDesc, str](r);
+    if (is_err[*TypeDesc, str](r)) { ret nil; }
+    ret unwrap_ok[*TypeDesc, str](r);
 }
 
 # dnit: free all memory owned by a type descriptor table
@@ -109,7 +109,7 @@ pub fun dnit(alloc: *allocator.Allocator, tbl: *TypeDescTable) {
     var i: usize = 0;
     for (i < tbl.descs.len) {
         if (tbl.descs.data[i].fields != nil) {
-            allocator.allocator_free[TypeDescField](alloc, tbl.descs.data[i].fields,
+            allocator.deallocate[TypeDescField](alloc, tbl.descs.data[i].fields,
                 tbl.descs.data[i].field_count::usize);
         }
         i = i + 1;

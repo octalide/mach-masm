@@ -113,21 +113,21 @@ pub fun block_append(alloc: *allocator.Allocator, block: *Block, i: inst.Instruc
             new_cap = block.inst_cap * 2;
         }
 
-        val r: Result[*inst.Instruction, allocator.AllocError] = allocator.allocator_resize[inst.Instruction](
+        val r: Result[*inst.Instruction, str] = allocator.reallocate[inst.Instruction](
             alloc, block.insts, block.inst_cap::usize, new_cap::usize
         );
-        if (result_is_err[*inst.Instruction, allocator.AllocError](r)) {
+        if (is_err[*inst.Instruction, str](r)) {
             ret -1;
         }
-        block.insts = result_unwrap_ok[*inst.Instruction, allocator.AllocError](r);
+        block.insts = unwrap_ok[*inst.Instruction, str](r);
 
-        val dr: Result[*DebugLoc, allocator.AllocError] = allocator.allocator_resize[DebugLoc](
+        val dr: Result[*DebugLoc, str] = allocator.reallocate[DebugLoc](
             alloc, block.debug_locs, block.inst_cap::usize, new_cap::usize
         );
-        if (result_is_err[*DebugLoc, allocator.AllocError](dr)) {
+        if (is_err[*DebugLoc, str](dr)) {
             ret -1;
         }
-        block.debug_locs = result_unwrap_ok[*DebugLoc, allocator.AllocError](dr);
+        block.debug_locs = unwrap_ok[*DebugLoc, str](dr);
 
         block.inst_cap = new_cap;
     }
@@ -163,11 +163,11 @@ pub fun block_set_debug(block: *Block, idx: i32, line: i32, file: u16) {
 pub fun block_dnit(alloc: *allocator.Allocator, block: *Block) {
     if (alloc == nil || block == nil) { ret; }
     if (block.insts != nil) {
-        allocator.allocator_free[inst.Instruction](alloc, block.insts, block.inst_cap::usize);
+        allocator.deallocate[inst.Instruction](alloc, block.insts, block.inst_cap::usize);
         block.insts = nil;
     }
     if (block.debug_locs != nil) {
-        allocator.allocator_free[DebugLoc](alloc, block.debug_locs, block.inst_cap::usize);
+        allocator.deallocate[DebugLoc](alloc, block.debug_locs, block.inst_cap::usize);
         block.debug_locs = nil;
     }
     block.inst_count = 0;
@@ -203,11 +203,11 @@ pub fun func_add_block(func: *Function, block: *Block) i32 {
     }
 
     val r: Result[usize, str] = vec.push[*Block](?func.blocks, block);
-    if (result_is_err[usize, str](r)) {
+    if (is_err[usize, str](r)) {
         ret -1;
     }
 
-    ret (result_unwrap_ok[usize, str](r) - 1)::i32;
+    ret (unwrap_ok[usize, str](r) - 1)::i32;
 }
 
 # func_dnit: free all internal memory owned by a function
@@ -224,7 +224,7 @@ pub fun func_dnit(alloc: *allocator.Allocator, func: *Function) {
     for (bi < func.blocks.len) {
         if (func.blocks.data[bi] != nil) {
             block_dnit(alloc, func.blocks.data[bi]);
-            allocator.allocator_free[Block](alloc, func.blocks.data[bi], 1);
+            allocator.deallocate[Block](alloc, func.blocks.data[bi], 1);
         }
         bi = bi + 1;
     }

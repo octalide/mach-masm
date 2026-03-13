@@ -335,10 +335,10 @@ fun parse_binding(l: *Lexer) sym.SymBinding {
 }
 
 fun intern_str(alloc: *allocator.Allocator, src: *u8, len: i32) str {
-    val ar: Result[*u8, allocator.AllocError] =
-        allocator.allocator_alloc[u8](alloc, (len + 1)::usize);
-    if (result_is_err[*u8, allocator.AllocError](ar)) { ret nil; }
-    val buf: *u8 = result_unwrap_ok[*u8, allocator.AllocError](ar);
+    val ar: Result[*u8, str] =
+        allocator.allocate[u8](alloc, (len + 1)::usize);
+    if (is_err[*u8, str](ar)) { ret nil; }
+    val buf: *u8 = unwrap_ok[*u8, str](ar);
     var i: i32 = 0;
     for (i < len) {
         buf[i] = src[i];
@@ -1207,12 +1207,12 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
     lex_next(l);
     skip_newlines(l);
 
-    val fr: Result[*fn.Function, allocator.AllocError] =
-        allocator.allocator_alloc[fn.Function](alloc, 1);
-    if (result_is_err[*fn.Function, allocator.AllocError](fr)) {
+    val fr: Result[*fn.Function, str] =
+        allocator.allocate[fn.Function](alloc, 1);
+    if (is_err[*fn.Function, str](fr)) {
         ret err[*fn.Function, str]("alloc failed");
     }
-    val f: *fn.Function = result_unwrap_ok[*fn.Function, allocator.AllocError](fr);
+    val f: *fn.Function = unwrap_ok[*fn.Function, str](fr);
     @f = fn.func_init(alloc, name);
     f.param_count = 0;
     f.flags = flags;
@@ -1227,20 +1227,20 @@ fun parse_function(alloc: *allocator.Allocator, l: *Lexer) Result[*fn.Function, 
             if (l.cur.kind == TOK_COLON) { lex_next(l); }
             skip_newlines(l);
 
-            val ba: Result[*fn.Block, allocator.AllocError] =
-                allocator.allocator_alloc[fn.Block](alloc, 1);
-            if (result_is_err[*fn.Block, allocator.AllocError](ba)) {
+            val ba: Result[*fn.Block, str] =
+                allocator.allocate[fn.Block](alloc, 1);
+            if (is_err[*fn.Block, str](ba)) {
                 ret err[*fn.Function, str]("alloc failed");
             }
-            val blk: *fn.Block = result_unwrap_ok[*fn.Block, allocator.AllocError](ba);
+            val blk: *fn.Block = unwrap_ok[*fn.Block, str](ba);
             @blk = fn.block_init(lbl_name);
 
             for (l.cur.kind != TOK_DOT_LBL && l.cur.kind != TOK_RBRACE && l.cur.kind != TOK_EOF) {
                 skip_newlines(l);
                 if (l.cur.kind == TOK_DOT_LBL || l.cur.kind == TOK_RBRACE || l.cur.kind == TOK_EOF) { brk; }
                 val ir: Result[bool, str] = parse_inst(alloc, l, f, blk);
-                if (result_is_err[bool, str](ir)) {
-                    ret err[*fn.Function, str](result_unwrap_err[bool, str](ir));
+                if (is_err[bool, str](ir)) {
+                    ret err[*fn.Function, str](unwrap_err[bool, str](ir));
                 }
             }
 
@@ -1295,16 +1295,16 @@ pub fun parse(alloc: *allocator.Allocator, text: *u8, len: usize) Result[mod.Mod
 
         if (tok_str_equals(?l.cur, "data")) {
             val dr: Result[data.DataDecl, str] = parse_data_decl(alloc, ?l);
-            if (result_is_err[data.DataDecl, str](dr)) {
-                ret err[mod.Module, str](result_unwrap_err[data.DataDecl, str](dr));
+            if (is_err[data.DataDecl, str](dr)) {
+                ret err[mod.Module, str](unwrap_err[data.DataDecl, str](dr));
             }
-            mod.builder_add_data(?mb, result_unwrap_ok[data.DataDecl, str](dr));
+            mod.builder_add_data(?mb, unwrap_ok[data.DataDecl, str](dr));
         } or (tok_str_equals(?l.cur, "fun")) {
             val fr: Result[*fn.Function, str] = parse_function(alloc, ?l);
-            if (result_is_err[*fn.Function, str](fr)) {
-                ret err[mod.Module, str](result_unwrap_err[*fn.Function, str](fr));
+            if (is_err[*fn.Function, str](fr)) {
+                ret err[mod.Module, str](unwrap_err[*fn.Function, str](fr));
             }
-            mod.builder_add_function(?mb, result_unwrap_ok[*fn.Function, str](fr));
+            mod.builder_add_function(?mb, unwrap_ok[*fn.Function, str](fr));
         } or {
             lex_next(?l);
         }

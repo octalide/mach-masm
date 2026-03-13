@@ -74,8 +74,8 @@ pub fun encode(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.Write
     var di: usize = 0;
     for (di < m.data_decls.decls.len) {
         val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
-        if (result_is_ok[*data.DataDecl, str](r)) {
-            encode_data_decl(?buf, ?stb, result_unwrap_ok[*data.DataDecl, str](r));
+        if (is_ok[*data.DataDecl, str](r)) {
+            encode_data_decl(?buf, ?stb, unwrap_ok[*data.DataDecl, str](r));
         }
         di = di + 1;
     }
@@ -112,8 +112,8 @@ fun intern_module_strings(stb: *strtab.Builder, m: *mod.Module) {
     var di: usize = 0;
     for (di < m.data_decls.decls.len) {
         val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
-        if (result_is_ok[*data.DataDecl, str](r)) {
-            val d: *data.DataDecl = result_unwrap_ok[*data.DataDecl, str](r);
+        if (is_ok[*data.DataDecl, str](r)) {
+            val d: *data.DataDecl = unwrap_ok[*data.DataDecl, str](r);
             strtab.stb_intern(stb, d.name);
             if (d.src_file != nil) {
                 strtab.stb_intern(stb, d.src_file);
@@ -273,10 +273,10 @@ fun encode_target_table(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
     val lcount: i32 = f.labels.count;
 
     if (lcount > 0) {
-        val r: Result[*u32, allocator.AllocError] =
-            allocator.allocator_alloc[u32](buf.alloc, lcount::usize);
-        if (result_is_ok[*u32, allocator.AllocError](r)) {
-            label_inst_map = result_unwrap_ok[*u32, allocator.AllocError](r);
+        val r: Result[*u32, str] =
+            allocator.allocate[u32](buf.alloc, lcount::usize);
+        if (is_ok[*u32, str](r)) {
+            label_inst_map = unwrap_ok[*u32, str](r);
         }
 
         var li: i32 = 0;
@@ -324,7 +324,7 @@ fun encode_target_table(buf: *bytebuf.WriteBuf, stb: *strtab.Builder,
     }
 
     if (label_inst_map != nil) {
-        allocator.allocator_free[u32](buf.alloc, label_inst_map, lcount::usize);
+        allocator.deallocate[u32](buf.alloc, label_inst_map, lcount::usize);
     }
 }
 
@@ -332,8 +332,8 @@ fun encode_type_descs(buf: *bytebuf.WriteBuf, tdt: *td.TypeDescTable) {
     var i: usize = 0;
     for (i < tdt.descs.len) {
         val r: Result[*td.TypeDesc, str] = vec.get[td.TypeDesc](?tdt.descs, i);
-        if (result_is_ok[*td.TypeDesc, str](r)) {
-            val d: *td.TypeDesc = result_unwrap_ok[*td.TypeDesc, str](r);
+        if (is_ok[*td.TypeDesc, str](r)) {
+            val d: *td.TypeDesc = unwrap_ok[*td.TypeDesc, str](r);
             bytebuf.wbuf_write[u8](buf, d.kind);
             bytebuf.wbuf_write[u16](buf, d.total_size);
             bytebuf.wbuf_write[u8](buf, d.align);

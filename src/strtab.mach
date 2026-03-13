@@ -62,8 +62,8 @@ pub fun stb_intern(b: *Builder, s: str) u32 {
     }
 
     val lookup: Result[*u32, str] = map.get[str, u32](?b.dedup, ?si);
-    if (result_is_ok[*u32, str](lookup)) {
-        ret @result_unwrap_ok[*u32, str](lookup);
+    if (is_ok[*u32, str](lookup)) {
+        ret @unwrap_ok[*u32, str](lookup);
     }
 
     val offset: u32 = b.buf.len::u32;

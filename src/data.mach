@@ -98,8 +98,8 @@ pub fun list_init(alloc: *allocator.Allocator) DataDeclList {
 pub fun list_add(l: *DataDeclList, decl: DataDecl) i32 {
     if (l == nil) { ret -1; }
     val r: Result[usize, str] = vec.push[DataDecl](?l.decls, decl);
-    if (result_is_err[usize, str](r)) { ret -1; }
-    ret (result_unwrap_ok[usize, str](r) - 1)::i32;
+    if (is_err[usize, str](r)) { ret -1; }
+    ret (unwrap_ok[usize, str](r) - 1)::i32;
 }
 
 # list_get: retrieve a declaration by index
@@ -110,8 +110,8 @@ pub fun list_add(l: *DataDeclList, decl: DataDecl) i32 {
 pub fun list_get(l: *DataDeclList, index: i32) *DataDecl {
     if (l == nil || index < 0) { ret nil; }
     val r: Result[*DataDecl, str] = vec.get[DataDecl](?l.decls, index::usize);
-    if (result_is_err[*DataDecl, str](r)) { ret nil; }
-    ret result_unwrap_ok[*DataDecl, str](r);
+    if (is_err[*DataDecl, str](r)) { ret nil; }
+    ret unwrap_ok[*DataDecl, str](r);
 }
 
 # list_dnit: free a list and all owned memory
@@ -127,10 +127,10 @@ pub fun list_dnit(alloc: *allocator.Allocator, l: *DataDeclList) {
     var i: usize = 0;
     for (i < l.decls.len) {
         if (l.decls.data[i].relocs != nil) {
-            allocator.allocator_free[DeclReloc](alloc, l.decls.data[i].relocs, l.decls.data[i].reloc_cap::usize);
+            allocator.deallocate[DeclReloc](alloc, l.decls.data[i].relocs, l.decls.data[i].reloc_cap::usize);
         }
         if (l.decls.data[i].data != nil) {
-            allocator.allocator_free[u8](alloc, l.decls.data[i].data, l.decls.data[i].data_len::usize);
+            allocator.deallocate[u8](alloc, l.decls.data[i].data, l.decls.data[i].data_len::usize);
         }
         i = i + 1;
     }
@@ -243,11 +243,11 @@ pub fun add_reloc(alloc: *allocator.Allocator, d: *DataDecl,
         var new_cap: i32 = INITIAL_RELOC_CAP;
         if (d.reloc_cap > 0) { new_cap = d.reloc_cap * 2; }
 
-        val r: Result[*DeclReloc, allocator.AllocError] =
-            allocator.allocator_resize[DeclReloc](alloc, d.relocs, d.reloc_cap::usize, new_cap::usize);
-        if (result_is_err[*DeclReloc, allocator.AllocError](r)) { ret -1; }
+        val r: Result[*DeclReloc, str] =
+            allocator.reallocate[DeclReloc](alloc, d.relocs, d.reloc_cap::usize, new_cap::usize);
+        if (is_err[*DeclReloc, str](r)) { ret -1; }
 
-        d.relocs = result_unwrap_ok[*DeclReloc, allocator.AllocError](r);
+        d.relocs = unwrap_ok[*DeclReloc, str](r);
         d.reloc_cap = new_cap;
     }
 
