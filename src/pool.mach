@@ -434,6 +434,33 @@ pub fun data_dnit(alloc: *allocator.Allocator, pool: *DataPool) {
     pool.data_cap = 0;
 }
 
+# const_count: number of interned constants
+# ---
+# pool: pointer to pool
+# ret:  count of interned values
+pub fun const_count(pool: *ConstPool) i32 {
+    if (pool == nil) { ret 0; }
+    ret pool.count;
+}
+
+# label_count: number of interned labels
+# ---
+# tbl: pointer to table
+# ret: count of interned labels
+pub fun label_count(tbl: *LabelTable) i32 {
+    if (tbl == nil) { ret 0; }
+    ret tbl.count;
+}
+
+# data_length: number of used bytes in the data pool buffer
+# ---
+# pool: pointer to pool
+# ret:  used byte count
+pub fun data_length(pool: *DataPool) i32 {
+    if (pool == nil) { ret 0; }
+    ret pool.data_len;
+}
+
 test "pool: const_intern returns index 0 for first value" {
     var a: allocator.Allocator = allocator.default();
     var p: ConstPool = const_init(?a);
