@@ -51,8 +51,8 @@ fun resolve_label(func: *fn.Function, lbl_idx: i32,
     val name: str = pool.label_get(?func.labels, lbl_idx);
     if (name == nil) { ret -1; }
     val r: Result[*i32, str] = map.get[str, i32](label_map, ?name);
-    if (result_is_err[*i32, str](r)) { ret -1; }
-    ret @result_unwrap_ok[*i32, str](r);
+    if (is_err[*i32, str](r)) { ret -1; }
+    ret @unwrap_ok[*i32, str](r);
 }
 
 # block_successors: compute successors for a block
@@ -133,10 +133,10 @@ pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
     val n: u16 = func.blocks.len::u16;
     cfg.block_count = n;
 
-    val br: Result[*BasicBlock, allocator.AllocError] =
-        allocator.allocator_resize[BasicBlock](alloc, nil, 0, n::usize);
-    if (result_is_err[*BasicBlock, allocator.AllocError](br)) { ret cfg; }
-    cfg.blocks = result_unwrap_ok[*BasicBlock, allocator.AllocError](br);
+    val br: Result[*BasicBlock, str] =
+        allocator.reallocate[BasicBlock](alloc, nil, 0, n::usize);
+    if (is_err[*BasicBlock, str](br)) { ret cfg; }
+    cfg.blocks = unwrap_ok[*BasicBlock, str](br);
 
     var label_map: map.Map[str, i32] = map.init[str, i32](alloc, map.hash_str, map.eq_str);
     var i: u16 = 0;
@@ -148,13 +148,13 @@ pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
         i = i + 1;
     }
 
-    val tmp_r: Result[*u16, allocator.AllocError] =
-        allocator.allocator_resize[u16](alloc, nil, 0, (n::usize) * 2);
-    if (result_is_err[*u16, allocator.AllocError](tmp_r)) {
+    val tmp_r: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, (n::usize) * 2);
+    if (is_err[*u16, str](tmp_r)) {
         map.dnit[str, i32](?label_map);
         ret cfg;
     }
-    var tmp_succ: *u16 = result_unwrap_ok[*u16, allocator.AllocError](tmp_r);
+    var tmp_succ: *u16 = unwrap_ok[*u16, str](tmp_r);
 
     var total_edges: usize = 0;
     i = 0;
@@ -175,10 +175,10 @@ pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
     }
 
     if (total_edges > 0) {
-        val sr: Result[*u16, allocator.AllocError] =
-            allocator.allocator_resize[u16](alloc, nil, 0, total_edges);
-        if (result_is_ok[*u16, allocator.AllocError](sr)) {
-            var succ_edges: *u16 = result_unwrap_ok[*u16, allocator.AllocError](sr);
+        val sr: Result[*u16, str] =
+            allocator.reallocate[u16](alloc, nil, 0, total_edges);
+        if (is_ok[*u16, str](sr)) {
+            var succ_edges: *u16 = unwrap_ok[*u16, str](sr);
             var offset: usize = 0;
             i = 0;
             for (i < n) {
@@ -210,10 +210,10 @@ pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
             i = i + 1;
         }
 
-        val pr: Result[*u16, allocator.AllocError] =
-            allocator.allocator_resize[u16](alloc, nil, 0, total_edges);
-        if (result_is_ok[*u16, allocator.AllocError](pr)) {
-            var pred_edges: *u16 = result_unwrap_ok[*u16, allocator.AllocError](pr);
+        val pr: Result[*u16, str] =
+            allocator.reallocate[u16](alloc, nil, 0, total_edges);
+        if (is_ok[*u16, str](pr)) {
+            var pred_edges: *u16 = unwrap_ok[*u16, str](pr);
             var offset: usize = 0;
             i = 0;
             for (i < n) {
@@ -247,7 +247,7 @@ pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
         }
     }
 
-    allocator.allocator_free[u16](alloc, tmp_succ, (n::usize) * 2);
+    allocator.deallocate[u16](alloc, tmp_succ, (n::usize) * 2);
     map.dnit[str, i32](?label_map);
 
     ret cfg;
@@ -279,13 +279,13 @@ pub fun cfg_dnit(alloc: *allocator.Allocator, cfg: *CFG) {
     }
 
     if (succ_base != nil) {
-        allocator.allocator_free[u16](alloc, succ_base, total_succ);
+        allocator.deallocate[u16](alloc, succ_base, total_succ);
     }
     if (pred_base != nil) {
-        allocator.allocator_free[u16](alloc, pred_base, total_pred);
+        allocator.deallocate[u16](alloc, pred_base, total_pred);
     }
 
-    allocator.allocator_free[BasicBlock](alloc, cfg.blocks, cfg.block_count::usize);
+    allocator.deallocate[BasicBlock](alloc, cfg.blocks, cfg.block_count::usize);
     cfg.blocks = nil;
     cfg.block_count = 0;
 }
@@ -312,27 +312,27 @@ fun compute_rpo(alloc: *allocator.Allocator, cfg: *CFG,
                 rpo: *u16, rpo_number: *u16) u16 {
     val n: u16 = cfg.block_count;
 
-    val vr: Result[*u8, allocator.AllocError] =
-        allocator.allocator_resize[u8](alloc, nil, 0, n::usize);
-    if (result_is_err[*u8, allocator.AllocError](vr)) { ret 0; }
-    var visited: *u8 = result_unwrap_ok[*u8, allocator.AllocError](vr);
+    val vr: Result[*u8, str] =
+        allocator.reallocate[u8](alloc, nil, 0, n::usize);
+    if (is_err[*u8, str](vr)) { ret 0; }
+    var visited: *u8 = unwrap_ok[*u8, str](vr);
 
-    val sr: Result[*u16, allocator.AllocError] =
-        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
-    if (result_is_err[*u16, allocator.AllocError](sr)) {
-        allocator.allocator_free[u8](alloc, visited, n::usize);
+    val sr: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](sr)) {
+        allocator.deallocate[u8](alloc, visited, n::usize);
         ret 0;
     }
-    var stack: *u16 = result_unwrap_ok[*u16, allocator.AllocError](sr);
+    var stack: *u16 = unwrap_ok[*u16, str](sr);
 
-    val ir: Result[*u16, allocator.AllocError] =
-        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
-    if (result_is_err[*u16, allocator.AllocError](ir)) {
-        allocator.allocator_free[u8](alloc, visited, n::usize);
-        allocator.allocator_free[u16](alloc, stack, n::usize);
+    val ir: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](ir)) {
+        allocator.deallocate[u8](alloc, visited, n::usize);
+        allocator.deallocate[u16](alloc, stack, n::usize);
         ret 0;
     }
-    var succ_idx: *u16 = result_unwrap_ok[*u16, allocator.AllocError](ir);
+    var succ_idx: *u16 = unwrap_ok[*u16, str](ir);
 
     var i: u16 = 0;
     for (i < n) {
@@ -387,9 +387,9 @@ fun compute_rpo(alloc: *allocator.Allocator, cfg: *CFG,
         i = i + 1;
     }
 
-    allocator.allocator_free[u8](alloc, visited, n::usize);
-    allocator.allocator_free[u16](alloc, stack, n::usize);
-    allocator.allocator_free[u16](alloc, succ_idx, n::usize);
+    allocator.deallocate[u8](alloc, visited, n::usize);
+    allocator.deallocate[u16](alloc, stack, n::usize);
+    allocator.deallocate[u16](alloc, succ_idx, n::usize);
 
     ret po_count;
 }
@@ -427,20 +427,20 @@ pub fun compute_dominance(alloc: *allocator.Allocator, cfg: *CFG) DomInfo {
     val n: u16 = cfg.block_count;
     dom.block_count = n;
 
-    val ir: Result[*u16, allocator.AllocError] =
-        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
-    if (result_is_err[*u16, allocator.AllocError](ir)) { ret dom; }
-    dom.idom = result_unwrap_ok[*u16, allocator.AllocError](ir);
+    val ir: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](ir)) { ret dom; }
+    dom.idom = unwrap_ok[*u16, str](ir);
 
-    val rr: Result[*u16, allocator.AllocError] =
-        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
-    if (result_is_err[*u16, allocator.AllocError](rr)) { ret dom; }
-    dom.rpo = result_unwrap_ok[*u16, allocator.AllocError](rr);
+    val rr: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](rr)) { ret dom; }
+    dom.rpo = unwrap_ok[*u16, str](rr);
 
-    val nr: Result[*u16, allocator.AllocError] =
-        allocator.allocator_resize[u16](alloc, nil, 0, n::usize);
-    if (result_is_err[*u16, allocator.AllocError](nr)) { ret dom; }
-    dom.rpo_number = result_unwrap_ok[*u16, allocator.AllocError](nr);
+    val nr: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](nr)) { ret dom; }
+    dom.rpo_number = unwrap_ok[*u16, str](nr);
 
     dom.rpo_count = compute_rpo(alloc, cfg, dom.rpo, dom.rpo_number);
     if (dom.rpo_count == 0) { ret dom; }
@@ -519,15 +519,15 @@ pub fun dom_dnit(alloc: *allocator.Allocator, dom: *DomInfo) {
     if (alloc == nil || dom == nil) { ret; }
     val n: usize = dom.block_count::usize;
     if (dom.idom != nil) {
-        allocator.allocator_free[u16](alloc, dom.idom, n);
+        allocator.deallocate[u16](alloc, dom.idom, n);
         dom.idom = nil;
     }
     if (dom.rpo != nil) {
-        allocator.allocator_free[u16](alloc, dom.rpo, n);
+        allocator.deallocate[u16](alloc, dom.rpo, n);
         dom.rpo = nil;
     }
     if (dom.rpo_number != nil) {
-        allocator.allocator_free[u16](alloc, dom.rpo_number, n);
+        allocator.deallocate[u16](alloc, dom.rpo_number, n);
         dom.rpo_number = nil;
     }
     dom.rpo_count = 0;
@@ -559,10 +559,10 @@ fun regset_alloc(alloc: *allocator.Allocator, wc: u16) RegSet {
     s.bits = nil;
     s.word_count = wc;
     if (wc == 0) { ret s; }
-    val r: Result[*u64, allocator.AllocError] =
-        allocator.allocator_resize[u64](alloc, nil, 0, wc::usize);
-    if (result_is_err[*u64, allocator.AllocError](r)) { ret s; }
-    s.bits = result_unwrap_ok[*u64, allocator.AllocError](r);
+    val r: Result[*u64, str] =
+        allocator.reallocate[u64](alloc, nil, 0, wc::usize);
+    if (is_err[*u64, str](r)) { ret s; }
+    s.bits = unwrap_ok[*u64, str](r);
     var i: u16 = 0;
     for (i < wc) { s.bits[i] = 0; i = i + 1; }
     ret s;
@@ -570,7 +570,7 @@ fun regset_alloc(alloc: *allocator.Allocator, wc: u16) RegSet {
 
 fun regset_free(alloc: *allocator.Allocator, s: *RegSet) {
     if (s.bits != nil) {
-        allocator.allocator_free[u64](alloc, s.bits, s.word_count::usize);
+        allocator.deallocate[u64](alloc, s.bits, s.word_count::usize);
         s.bits = nil;
     }
 }
@@ -712,26 +712,26 @@ pub fun compute_liveness(alloc: *allocator.Allocator, cfg: *CFG,
     val max_reg: u16 = find_max_reg(cfg);
     val wc: u16 = (max_reg / 64) + 1;
 
-    val li_r: Result[*RegSet, allocator.AllocError] =
-        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
-    if (result_is_err[*RegSet, allocator.AllocError](li_r)) { ret ls; }
-    ls.live_in = result_unwrap_ok[*RegSet, allocator.AllocError](li_r);
+    val li_r: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](li_r)) { ret ls; }
+    ls.live_in = unwrap_ok[*RegSet, str](li_r);
 
-    val lo_r: Result[*RegSet, allocator.AllocError] =
-        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
-    if (result_is_err[*RegSet, allocator.AllocError](lo_r)) { ret ls; }
-    ls.live_out = result_unwrap_ok[*RegSet, allocator.AllocError](lo_r);
+    val lo_r: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](lo_r)) { ret ls; }
+    ls.live_out = unwrap_ok[*RegSet, str](lo_r);
     ls.count = n;
 
-    val dr: Result[*RegSet, allocator.AllocError] =
-        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
-    if (result_is_err[*RegSet, allocator.AllocError](dr)) { ret ls; }
-    var def_sets: *RegSet = result_unwrap_ok[*RegSet, allocator.AllocError](dr);
+    val dr: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](dr)) { ret ls; }
+    var def_sets: *RegSet = unwrap_ok[*RegSet, str](dr);
 
-    val ur: Result[*RegSet, allocator.AllocError] =
-        allocator.allocator_resize[RegSet](alloc, nil, 0, n::usize);
-    if (result_is_err[*RegSet, allocator.AllocError](ur)) { ret ls; }
-    var use_sets: *RegSet = result_unwrap_ok[*RegSet, allocator.AllocError](ur);
+    val ur: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](ur)) { ret ls; }
+    var use_sets: *RegSet = unwrap_ok[*RegSet, str](ur);
 
     var i: u16 = 0;
     for (i < n) {
@@ -772,8 +772,8 @@ pub fun compute_liveness(alloc: *allocator.Allocator, cfg: *CFG,
         regset_free(alloc, ?use_sets[i]);
         i = i + 1;
     }
-    allocator.allocator_free[RegSet](alloc, def_sets, n::usize);
-    allocator.allocator_free[RegSet](alloc, use_sets, n::usize);
+    allocator.deallocate[RegSet](alloc, def_sets, n::usize);
+    allocator.deallocate[RegSet](alloc, use_sets, n::usize);
 
     ret ls;
 }
@@ -813,21 +813,21 @@ pub fun live_dnit(alloc: *allocator.Allocator, sets: *LiveSets) {
         i = i + 1;
     }
     if (sets.live_in != nil) {
-        allocator.allocator_free[RegSet](alloc, sets.live_in, sets.count::usize);
+        allocator.deallocate[RegSet](alloc, sets.live_in, sets.count::usize);
         sets.live_in = nil;
     }
     if (sets.live_out != nil) {
-        allocator.allocator_free[RegSet](alloc, sets.live_out, sets.count::usize);
+        allocator.deallocate[RegSet](alloc, sets.live_out, sets.count::usize);
         sets.live_out = nil;
     }
     sets.count = 0;
 }
 
 fun alloc_block(alloc: *allocator.Allocator, label: str) *fn.Block {
-    val r: Result[*fn.Block, allocator.AllocError] =
-        allocator.allocator_resize[fn.Block](alloc, nil, 0, 1);
-    if (result_is_err[*fn.Block, allocator.AllocError](r)) { ret nil; }
-    var blk: *fn.Block = result_unwrap_ok[*fn.Block, allocator.AllocError](r);
+    val r: Result[*fn.Block, str] =
+        allocator.reallocate[fn.Block](alloc, nil, 0, 1);
+    if (is_err[*fn.Block, str](r)) { ret nil; }
+    var blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(label);
     ret blk;
 }

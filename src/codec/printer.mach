@@ -37,8 +37,8 @@ pub fun print(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.WriteB
     var di: usize = 0;
     for (di < m.data_decls.decls.len) {
         val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
-        if (result_is_ok[*data.DataDecl, str](r)) {
-            print_data_decl(?buf, result_unwrap_ok[*data.DataDecl, str](r));
+        if (is_ok[*data.DataDecl, str](r)) {
+            print_data_decl(?buf, unwrap_ok[*data.DataDecl, str](r));
         }
         di = di + 1;
     }

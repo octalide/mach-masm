@@ -64,21 +64,21 @@ pub fun const_intern(alloc: *allocator.Allocator, pool: *ConstPool, value: u64) 
     }
 
     val lookup: Result[*i32, str] = map.get[u64, i32](?pool.dedup, ?value);
-    if (result_is_ok[*i32, str](lookup)) {
-        ret @result_unwrap_ok[*i32, str](lookup);
+    if (is_ok[*i32, str](lookup)) {
+        ret @unwrap_ok[*i32, str](lookup);
     }
 
     if (pool.count >= pool.cap) {
         var new_cap: i32 = CONST_POOL_INITIAL_CAP;
         if (pool.cap > 0) { new_cap = pool.cap * 2; }
-        val r: Result[*u64, allocator.AllocError] =
-            allocator.allocator_resize[u64](alloc, pool.values,
+        val r: Result[*u64, str] =
+            allocator.reallocate[u64](alloc, pool.values,
                 pool.cap::usize, new_cap::usize);
-        if (result_is_err[*u64, allocator.AllocError](r)) {
+        if (is_err[*u64, str](r)) {
             dbg.eprintln("[masm] const_intern: allocation failed");
             ret -1;
         }
-        pool.values = result_unwrap_ok[*u64, allocator.AllocError](r);
+        pool.values = unwrap_ok[*u64, str](r);
         pool.cap = new_cap;
     }
 
@@ -107,7 +107,7 @@ pub fun const_dnit(alloc: *allocator.Allocator, pool: *ConstPool) {
     if (alloc == nil || pool == nil) { ret; }
     map.dnit[u64, i32](?pool.dedup);
     if (pool.values != nil) {
-        allocator.allocator_free[u64](alloc, pool.values, pool.cap::usize);
+        allocator.deallocate[u64](alloc, pool.values, pool.cap::usize);
         pool.values = nil;
     }
     pool.count = 0;
@@ -160,21 +160,21 @@ pub fun label_intern(alloc: *allocator.Allocator, tbl: *LabelTable, name: str) i
     }
 
     val lookup: Result[*i32, str] = map.get[str, i32](?tbl.dedup, ?name);
-    if (result_is_ok[*i32, str](lookup)) {
-        ret @result_unwrap_ok[*i32, str](lookup);
+    if (is_ok[*i32, str](lookup)) {
+        ret @unwrap_ok[*i32, str](lookup);
     }
 
     if (tbl.count >= tbl.cap) {
         var new_cap: i32 = LABEL_TABLE_INITIAL_CAP;
         if (tbl.cap > 0) { new_cap = tbl.cap * 2; }
-        val r: Result[*str, allocator.AllocError] =
-            allocator.allocator_resize[str](alloc, tbl.names,
+        val r: Result[*str, str] =
+            allocator.reallocate[str](alloc, tbl.names,
                 tbl.cap::usize, new_cap::usize);
-        if (result_is_err[*str, allocator.AllocError](r)) {
+        if (is_err[*str, str](r)) {
             dbg.eprintln("[masm] label_intern: allocation failed");
             ret -1;
         }
-        tbl.names = result_unwrap_ok[*str, allocator.AllocError](r);
+        tbl.names = unwrap_ok[*str, str](r);
         tbl.cap = new_cap;
     }
 
@@ -203,7 +203,7 @@ pub fun label_dnit(alloc: *allocator.Allocator, tbl: *LabelTable) {
     if (alloc == nil || tbl == nil) { ret; }
     map.dnit[str, i32](?tbl.dedup);
     if (tbl.names != nil) {
-        allocator.allocator_free[str](alloc, tbl.names, tbl.cap::usize);
+        allocator.deallocate[str](alloc, tbl.names, tbl.cap::usize);
         tbl.names = nil;
     }
     tbl.count = 0;
@@ -310,8 +310,8 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
 
     val h: u64 = hash_bytes(ptr, size);
     val lookup: Result[*i32, str] = map.get[u64, i32](?pool.dedup, ?h);
-    if (result_is_ok[*i32, str](lookup)) {
-        val candidate: i32 = @result_unwrap_ok[*i32, str](lookup);
+    if (is_ok[*i32, str](lookup)) {
+        val candidate: i32 = @unwrap_ok[*i32, str](lookup);
         if (candidate >= 0 && candidate < pool.count &&
             pool.sizes[candidate] == size &&
             bytes_equal(?pool.data[pool.offsets[candidate]], ptr, size)) {
@@ -326,14 +326,14 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
         var new_cap: i32 = DATA_POOL_INITIAL_DATA_CAP;
         if (pool.data_cap > 0) { new_cap = pool.data_cap * 2; }
         for (new_cap < needed) { new_cap = new_cap * 2; }
-        val r: Result[*u8, allocator.AllocError] =
-            allocator.allocator_resize[u8](alloc, pool.data,
+        val r: Result[*u8, str] =
+            allocator.reallocate[u8](alloc, pool.data,
                 pool.data_cap::usize, new_cap::usize);
-        if (result_is_err[*u8, allocator.AllocError](r)) {
+        if (is_err[*u8, str](r)) {
             dbg.eprintln("[masm] data_intern: data buffer allocation failed");
             ret -1;
         }
-        pool.data = result_unwrap_ok[*u8, allocator.AllocError](r);
+        pool.data = unwrap_ok[*u8, str](r);
         pool.data_cap = new_cap;
     }
 
@@ -341,23 +341,23 @@ pub fun data_intern(alloc: *allocator.Allocator, pool: *DataPool, ptr: *u8, size
         var new_cap: i32 = DATA_POOL_INITIAL_CAP;
         if (pool.cap > 0) { new_cap = pool.cap * 2; }
 
-        val r1: Result[*i32, allocator.AllocError] =
-            allocator.allocator_resize[i32](alloc, pool.offsets,
+        val r1: Result[*i32, str] =
+            allocator.reallocate[i32](alloc, pool.offsets,
                 pool.cap::usize, new_cap::usize);
-        if (result_is_err[*i32, allocator.AllocError](r1)) {
+        if (is_err[*i32, str](r1)) {
             dbg.eprintln("[masm] data_intern: offsets allocation failed");
             ret -1;
         }
-        pool.offsets = result_unwrap_ok[*i32, allocator.AllocError](r1);
+        pool.offsets = unwrap_ok[*i32, str](r1);
 
-        val r2: Result[*i32, allocator.AllocError] =
-            allocator.allocator_resize[i32](alloc, pool.sizes,
+        val r2: Result[*i32, str] =
+            allocator.reallocate[i32](alloc, pool.sizes,
                 pool.cap::usize, new_cap::usize);
-        if (result_is_err[*i32, allocator.AllocError](r2)) {
+        if (is_err[*i32, str](r2)) {
             dbg.eprintln("[masm] data_intern: sizes allocation failed");
             ret -1;
         }
-        pool.sizes = result_unwrap_ok[*i32, allocator.AllocError](r2);
+        pool.sizes = unwrap_ok[*i32, str](r2);
 
         pool.cap = new_cap;
     }
@@ -417,15 +417,15 @@ pub fun data_dnit(alloc: *allocator.Allocator, pool: *DataPool) {
     if (alloc == nil || pool == nil) { ret; }
     map.dnit[u64, i32](?pool.dedup);
     if (pool.data != nil) {
-        allocator.allocator_free[u8](alloc, pool.data, pool.data_cap::usize);
+        allocator.deallocate[u8](alloc, pool.data, pool.data_cap::usize);
         pool.data = nil;
     }
     if (pool.offsets != nil) {
-        allocator.allocator_free[i32](alloc, pool.offsets, pool.cap::usize);
+        allocator.deallocate[i32](alloc, pool.offsets, pool.cap::usize);
         pool.offsets = nil;
     }
     if (pool.sizes != nil) {
-        allocator.allocator_free[i32](alloc, pool.sizes, pool.cap::usize);
+        allocator.deallocate[i32](alloc, pool.sizes, pool.cap::usize);
         pool.sizes = nil;
     }
     pool.count = 0;

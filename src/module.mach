@@ -66,7 +66,7 @@ pub fun builder_add_function(b: *ModuleBuilder, func: *fn.Function) Result[bool,
     if (b == nil || func == nil) { ret err[bool, str]("nil argument"); }
 
     val r: Result[usize, str] = vec.push[*fn.Function](?b.functions, func);
-    if (result_is_err[usize, str](r)) {
+    if (is_err[usize, str](r)) {
         ret err[bool, str]("out of memory");
     }
     ret ok[bool, str](true);
@@ -102,8 +102,8 @@ pub fun builder_add_debug_file(b: *ModuleBuilder, path: str) u16 {
     }
 
     val r: Result[usize, str] = vec.push[str](?b.debug_files, path);
-    if (result_is_err[usize, str](r)) { ret 0; }
-    ret (result_unwrap_ok[usize, str](r))::u16;
+    if (is_err[usize, str](r)) { ret 0; }
+    ret (unwrap_ok[usize, str](r))::u16;
 }
 
 # build: freeze the builder into an immutable Module
@@ -139,7 +139,7 @@ pub fun module_dnit(alloc: *allocator.Allocator, m: *Module) {
     for (i < m.functions.len) {
         if (m.functions.data[i] != nil) {
             fn.func_dnit(alloc, m.functions.data[i]);
-            allocator.allocator_free[fn.Function](alloc, m.functions.data[i], 1);
+            allocator.deallocate[fn.Function](alloc, m.functions.data[i], 1);
         }
         i = i + 1;
     }

@@ -92,8 +92,8 @@ pub fun tab_add(t: *Table, name: str, name_off: u32, binding: u8,
     e.kind = kind;
 
     val r: Result[usize, str] = vec.push[Entry](?t.entries, e);
-    if (result_is_err[usize, str](r)) { ret 0xFFFF; }
-    val idx: u16 = (result_unwrap_ok[usize, str](r) - 1)::u16;
+    if (is_err[usize, str](r)) { ret 0xFFFF; }
+    val idx: u16 = (unwrap_ok[usize, str](r) - 1)::u16;
 
     if (name != nil) {
         map.insert[str, u16](?t.name_map, name, idx);
@@ -110,8 +110,8 @@ pub fun tab_add(t: *Table, name: str, name_off: u32, binding: u8,
 pub fun tab_find(t: *Table, name: str) u16 {
     if (t == nil || name == nil) { ret 0xFFFF; }
     val r: Result[*u16, str] = map.get[str, u16](?t.name_map, ?name);
-    if (result_is_err[*u16, str](r)) { ret 0xFFFF; }
-    ret @result_unwrap_ok[*u16, str](r);
+    if (is_err[*u16, str](r)) { ret 0xFFFF; }
+    ret @unwrap_ok[*u16, str](r);
 }
 
 # tab_count: number of entries in the table
@@ -131,8 +131,8 @@ pub fun tab_count(t: *Table) u16 {
 pub fun tab_get(t: *Table, idx: u16) *Entry {
     if (t == nil) { ret nil; }
     val r: Result[*Entry, str] = vec.get[Entry](?t.entries, idx::usize);
-    if (result_is_err[*Entry, str](r)) { ret nil; }
-    ret result_unwrap_ok[*Entry, str](r);
+    if (is_err[*Entry, str](r)) { ret nil; }
+    ret unwrap_ok[*Entry, str](r);
 }
 
 # build_from_module: synthesize a symbol table from a Module
@@ -164,8 +164,8 @@ pub fun build_from_module(alloc: *allocator.Allocator, stb: *strtab.Builder,
     var di: usize = 0;
     for (di < m.data_decls.decls.len) {
         val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
-        if (result_is_ok[*data.DataDecl, str](r)) {
-            val d: *data.DataDecl = result_unwrap_ok[*data.DataDecl, str](r);
+        if (is_ok[*data.DataDecl, str](r)) {
+            val d: *data.DataDecl = unwrap_ok[*data.DataDecl, str](r);
             if (d.sym_type != sym.SYM_FUNC) {
                 val name_off: u32 = strtab.stb_intern(stb, d.name);
                 tab_add(?t, d.name, name_off, d.binding, d.sym_type,

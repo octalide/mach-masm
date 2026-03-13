@@ -54,17 +54,17 @@ fun cmd_compile(argc: i64, argv: &&u8) i64 {
     var a: alloc.Allocator = alloc.default();
 
     val pr: Result[mod.Module, str] = codec.parse_file(?a, input);
-    if (result_is_err[mod.Module, str](pr)) {
-        print.eprintlnf("error: %s", result_unwrap_err[mod.Module, str](pr));
+    if (is_err[mod.Module, str](pr)) {
+        print.eprintlnf("error: %s", unwrap_err[mod.Module, str](pr));
         ret 1;
     }
-    var m: mod.Module = result_unwrap_ok[mod.Module, str](pr);
+    var m: mod.Module = unwrap_ok[mod.Module, str](pr);
 
     val er: Result[bool, str] = codec.encode_file(?a, ?m, output);
     mod.module_dnit(?a, ?m);
 
-    if (result_is_err[bool, str](er)) {
-        print.eprintlnf("error: %s", result_unwrap_err[bool, str](er));
+    if (is_err[bool, str](er)) {
+        print.eprintlnf("error: %s", unwrap_err[bool, str](er));
         ret 1;
     }
 
@@ -88,17 +88,17 @@ fun cmd_print(argc: i64, argv: &&u8) i64 {
     var a: alloc.Allocator = alloc.default();
 
     val dr: Result[mod.Module, str] = codec.decode_file(?a, input);
-    if (result_is_err[mod.Module, str](dr)) {
-        print.eprintlnf("error: %s", result_unwrap_err[mod.Module, str](dr));
+    if (is_err[mod.Module, str](dr)) {
+        print.eprintlnf("error: %s", unwrap_err[mod.Module, str](dr));
         ret 1;
     }
-    var m: mod.Module = result_unwrap_ok[mod.Module, str](dr);
+    var m: mod.Module = unwrap_ok[mod.Module, str](dr);
 
     val pr: Result[bool, str] = codec.print_file(?a, ?m, output);
     mod.module_dnit(?a, ?m);
 
-    if (result_is_err[bool, str](pr)) {
-        print.eprintlnf("error: %s", result_unwrap_err[bool, str](pr));
+    if (is_err[bool, str](pr)) {
+        print.eprintlnf("error: %s", unwrap_err[bool, str](pr));
         ret 1;
     }
 
@@ -119,18 +119,18 @@ fun cmd_info(argc: i64, argv: &&u8) i64 {
     var m: mod.Module;
     var from_binary: bool = true;
 
-    if (result_is_err[mod.Module, str](dr)) {
-        val decode_err: str = result_unwrap_err[mod.Module, str](dr);
+    if (is_err[mod.Module, str](dr)) {
+        val decode_err: str = unwrap_err[mod.Module, str](dr);
         val pr: Result[mod.Module, str] = codec.parse_file(?a, input);
-        if (result_is_err[mod.Module, str](pr)) {
+        if (is_err[mod.Module, str](pr)) {
             print.eprintlnf("error (binary): %s", decode_err);
-            print.eprintlnf("error (text):   %s", result_unwrap_err[mod.Module, str](pr));
+            print.eprintlnf("error (text):   %s", unwrap_err[mod.Module, str](pr));
             ret 1;
         }
-        m = result_unwrap_ok[mod.Module, str](pr);
+        m = unwrap_ok[mod.Module, str](pr);
         from_binary = false;
     } or {
-        m = result_unwrap_ok[mod.Module, str](dr);
+        m = unwrap_ok[mod.Module, str](dr);
     }
 
     if (from_binary) {
