@@ -118,6 +118,15 @@ pub fun dnit(alloc: *allocator.Allocator, tbl: *TypeDescTable) {
     vec.dnit[TypeDesc](?tbl.descs);
 }
 
+# count: number of type descriptors in the table
+# ---
+# tbl: pointer to table
+# ret: count of interned descriptors
+pub fun count(tbl: *TypeDescTable) i32 {
+    if (tbl == nil) { ret 0; }
+    ret tbl.descs.len::i32;
+}
+
 # make_int: create a scalar integer type descriptor
 # ---
 # size:  byte size (1, 2, 4, or 8)
