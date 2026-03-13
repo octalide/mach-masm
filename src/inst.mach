@@ -259,14 +259,14 @@ pub fun make_conv_ftoi(dst: u16, src: u16, dst_size: u8, src_float_size: u8) Ins
     ret mk(op.OP_CONV, make_meta(op.CONV_FTOI, dst_size, 0), dst, src, src_float_size::u16);
 }
 
-# make_unary: register-to-register copy (OP_MOV reg-reg)
+# make_mov_reg: register-to-register copy (OP_MOV reg-reg)
 # ---
 # dst:  destination register
 # src:  source register
 # size: operation size in bytes
 # ret:  constructed instruction
-pub fun make_unary(o: u8, dst: u16, src: u16, size: u8) Instruction {
-    ret mk(o, make_meta(0, size, 0), dst, src, 0);
+pub fun make_mov_reg(dst: u16, src: u16, size: u8) Instruction {
+    ret mk(op.OP_MOV, make_meta(0, size, 0), dst, src, 0);
 }
 
 # make_mov_imm32: move a 32-bit immediate from the data pool into a register

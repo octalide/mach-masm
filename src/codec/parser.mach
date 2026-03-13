@@ -728,7 +728,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
 
         if (l.cur.kind == TOK_REG) {
             val src: u16 = parse_reg(l);
-            fn.block_append(alloc, blk, inst.make_unary(op.OP_MOV, dst, src, sz));
+            fn.block_append(alloc, blk, inst.make_mov_reg(dst, src, sz));
         } or {
             var neg: bool = false;
             if (l.cur.kind == TOK_MINUS) {
