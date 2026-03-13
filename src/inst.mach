@@ -555,6 +555,40 @@ pub fun is_vreg(reg: i32) bool {
     ret reg >= VREG_START;
 }
 
+# is_valid_size: check whether a byte count is a valid instruction operand size
+#
+# valid sizes are powers of two from 1 to 128. values like 0, 3, 5, etc.
+# are invalid and would be silently rounded up by encode_size.
+# ---
+# size: byte count
+# ret:  true if size is a valid power-of-two operand size
+pub fun is_valid_size(size: u8) bool {
+    if (size == 0) { ret false; }
+    ret (size & (size - 1)) == 0 && size <= 128;
+}
+
+test "inst: is_valid_size accepts powers of two" {
+    if (!is_valid_size(1))   { ret 0; }
+    if (!is_valid_size(2))   { ret 0; }
+    if (!is_valid_size(4))   { ret 0; }
+    if (!is_valid_size(8))   { ret 0; }
+    if (!is_valid_size(16))  { ret 0; }
+    if (!is_valid_size(32))  { ret 0; }
+    if (!is_valid_size(64))  { ret 0; }
+    if (!is_valid_size(128)) { ret 0; }
+    ret 1;
+}
+
+test "inst: is_valid_size rejects non-powers and zero" {
+    if (is_valid_size(0))  { ret 0; }
+    if (is_valid_size(3))  { ret 0; }
+    if (is_valid_size(5))  { ret 0; }
+    if (is_valid_size(6))  { ret 0; }
+    if (is_valid_size(7))  { ret 0; }
+    if (is_valid_size(10)) { ret 0; }
+    ret 1;
+}
+
 test "inst: encode_size and decode_size round-trip" {
     if (decode_size(encode_size(1)) != 1) { ret 0; }
     if (decode_size(encode_size(2)) != 2) { ret 0; }

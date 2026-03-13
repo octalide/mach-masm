@@ -274,3 +274,134 @@ pub fun rmw_name(op: u8) str {
     if (op == RMW_XCHG) { ret "xchg"; }
     ret "unknown";
 }
+
+# is_valid_div_mode: check whether a division mode value is in range
+# ---
+# mode: division mode
+# ret:  true if valid (DIV_QUOT..DIV_FLOAT)
+pub fun is_valid_div_mode(mode: u8) bool {
+    ret mode <= DIV_FLOAT;
+}
+
+# is_valid_conv_kind: check whether a conversion kind value is in range
+# ---
+# kind: conversion kind
+# ret:  true if valid (CONV_ZEXT..CONV_FTRUNC)
+pub fun is_valid_conv_kind(kind: u8) bool {
+    ret kind <= CONV_FTRUNC;
+}
+
+# is_valid_mo: check whether a memory ordering value is in range
+# ---
+# mo: memory ordering
+# ret: true if valid (MO_RELAXED..MO_SEQ_CST)
+pub fun is_valid_mo(mo: u8) bool {
+    ret mo <= MO_SEQ_CST;
+}
+
+# is_valid_rmw_op: check whether an atomic RMW operation value is in range
+# ---
+# rmw: RMW operation
+# ret: true if valid (RMW_ADD..RMW_XCHG)
+pub fun is_valid_rmw_op(rmw: u8) bool {
+    ret rmw <= RMW_XCHG;
+}
+
+# is_valid_hint_kind: check whether a hint kind value is in range
+# ---
+# kind: hint kind
+# ret:  true if valid
+pub fun is_valid_hint_kind(kind: u8) bool {
+    ret kind <= HINT_PAUSE;
+}
+
+# is_valid_cc: check whether a condition code is valid for the given opcode
+#
+# validates that the cc field of the meta byte is in the legal range for
+# the instruction's opcode. most opcodes require cc=0; comparisons and
+# branches accept CC_NONE..CC_UGE; division, conversion, shifts, atomics,
+# and hints each have their own valid ranges.
+# ---
+# o:  opcode
+# cc: condition code value from meta byte
+# ret: true if the cc value is valid for this opcode
+pub fun is_valid_cc(o: u8, cc: u8) bool {
+    if (o == OP_CMP || o == OP_BRANCH) { ret cc <= CC_UGE; }
+    if (o == OP_DIV)  { ret is_valid_div_mode(cc); }
+    if (o == OP_CONV) { ret is_valid_conv_kind(cc); }
+    if (o == OP_SHR)  { ret cc <= SHR_ARITHMETIC; }
+    if (o == OP_HINT) { ret is_valid_hint_kind(cc); }
+    if (o == OP_CALL) { ret cc <= CALL_TAIL; }
+
+    if (o == OP_ADD || o == OP_SUB || o == OP_MUL) {
+        ret cc <= ALU_FLOAT;
+    }
+
+    if (o == OP_ATOMIC_LOAD || o == OP_ATOMIC_STORE ||
+        o == OP_ATOMIC_CAS  || o == OP_ATOMIC_RMW   ||
+        o == OP_FENCE) {
+        ret is_valid_mo(cc);
+    }
+
+    if (o == OP_MOV) { ret cc <= 1; }
+    if (o == OP_ADDR) { ret cc <= 1; }
+
+    if (o == OP_LOAD || o == OP_STORE) { ret cc <= 3; }
+
+    ret cc == 0;
+}
+
+test "op: is_valid_div_mode" {
+    if (!is_valid_div_mode(DIV_QUOT))  { ret 0; }
+    if (!is_valid_div_mode(DIV_FLOAT)) { ret 0; }
+    if (is_valid_div_mode(5))          { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_conv_kind" {
+    if (!is_valid_conv_kind(CONV_ZEXT))   { ret 0; }
+    if (!is_valid_conv_kind(CONV_FTRUNC)) { ret 0; }
+    if (is_valid_conv_kind(7))            { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_mo" {
+    if (!is_valid_mo(MO_RELAXED)) { ret 0; }
+    if (!is_valid_mo(MO_SEQ_CST)) { ret 0; }
+    if (is_valid_mo(5))           { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_rmw_op" {
+    if (!is_valid_rmw_op(RMW_ADD))  { ret 0; }
+    if (!is_valid_rmw_op(RMW_XCHG)) { ret 0; }
+    if (is_valid_rmw_op(6))         { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_cc for cmp accepts condition codes" {
+    if (!is_valid_cc(OP_CMP, CC_EQ))  { ret 0; }
+    if (!is_valid_cc(OP_CMP, CC_UGE)) { ret 0; }
+    if (is_valid_cc(OP_CMP, 11))      { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_cc for add accepts 0 and ALU_FLOAT" {
+    if (!is_valid_cc(OP_ADD, 0))         { ret 0; }
+    if (!is_valid_cc(OP_ADD, ALU_FLOAT)) { ret 0; }
+    if (is_valid_cc(OP_ADD, 2))          { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_cc for div accepts division modes" {
+    if (!is_valid_cc(OP_DIV, DIV_QUOT))  { ret 0; }
+    if (!is_valid_cc(OP_DIV, DIV_FLOAT)) { ret 0; }
+    if (is_valid_cc(OP_DIV, 5))          { ret 0; }
+    ret 1;
+}
+
+test "op: is_valid_cc for fence accepts memory orderings" {
+    if (!is_valid_cc(OP_FENCE, MO_SEQ_CST)) { ret 0; }
+    if (is_valid_cc(OP_FENCE, 5))           { ret 0; }
+    ret 1;
+}
