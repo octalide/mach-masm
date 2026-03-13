@@ -13,9 +13,10 @@ use std.types.string;
 use alloc: std.allocator;
 use print: std.print;
 
-use fn:    masm.function;
-use mod:   masm.module;
-use codec: masm.codec;
+use fn:     masm.function;
+use mod:    masm.module;
+use codec:  masm.codec;
+use verify: masm.verify;
 
 fun print_usage() {
     print.eprintln("usage: masm <command> [options]");
@@ -24,6 +25,7 @@ fun print_usage() {
     print.eprintln("  compile <input.masm> [-o output.mo]    parse text, encode binary");
     print.eprintln("  print   <input.mo>   [-o output.masm]  decode binary, print text");
     print.eprintln("  info    <input>                         show module summary");
+    print.eprintln("  verify  <input>                         validate IR well-formedness");
     print.eprintln("  help                                    print this message");
 }
 
@@ -168,6 +170,44 @@ fun cmd_info(argc: i64, argv: &&u8) i64 {
     ret 0;
 }
 
+fun cmd_verify(argc: i64, argv: &&u8) i64 {
+    if (argc < 3) {
+        print.eprintln("error: verify requires an input file");
+        print_usage();
+        ret 1;
+    }
+
+    val input: str = argv[2];
+    var a: alloc.Allocator = alloc.default();
+
+    val dr: Result[mod.Module, str] = codec.decode_file(?a, input);
+    var m: mod.Module;
+
+    if (is_err[mod.Module, str](dr)) {
+        val decode_err: str = unwrap_err[mod.Module, str](dr);
+        val pr: Result[mod.Module, str] = codec.parse_file(?a, input);
+        if (is_err[mod.Module, str](pr)) {
+            print.eprintlnf("error (binary): %s", decode_err);
+            print.eprintlnf("error (text):   %s", unwrap_err[mod.Module, str](pr));
+            ret 1;
+        }
+        m = unwrap_ok[mod.Module, str](pr);
+    } or {
+        m = unwrap_ok[mod.Module, str](dr);
+    }
+
+    val vr: Result[bool, str] = verify.verify_module(?m);
+    mod.module_dnit(?a, ?m);
+
+    if (is_err[bool, str](vr)) {
+        print.eprintlnf("FAIL: %s", unwrap_err[bool, str](vr));
+        ret 1;
+    }
+
+    print.println("OK: module is well-formed");
+    ret 0;
+}
+
 fun cmd_help(argc: i64, argv: &&u8) i64 {
     print_usage();
     ret 0;
@@ -185,6 +225,7 @@ fun main(argc: i64, argv: &&u8) i64 {
     if (str_equals(command, "compile")) { ret cmd_compile(argc, argv); }
     if (str_equals(command, "print"))   { ret cmd_print(argc, argv); }
     if (str_equals(command, "info"))    { ret cmd_info(argc, argv); }
+    if (str_equals(command, "verify"))  { ret cmd_verify(argc, argv); }
     if (str_equals(command, "help"))    { ret cmd_help(argc, argv); }
 
     print.eprintlnf("error: unknown command '%s'", command);
