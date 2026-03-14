@@ -10,7 +10,8 @@ use std.types.size;
 use std.types.string;
 use std.types.result;
 
-use vec: std.collections.vector;
+use allocator: std.allocator;
+use vec:       std.collections.vector;
 
 use op:       masm.op;
 use inst:     masm.inst;
@@ -313,11 +314,11 @@ fun verify_hint(i: &inst.Instruction) Result[bool, str] {
 }
 
 test "verify: valid function passes" {
-    var a: std.allocator.Allocator = std.allocator.default();
+    var a: allocator.Allocator = allocator.default();
     var func: fn.Function = fn.func_init(?a, "test");
 
     val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
-    val r: Result[*fn.Block, str] = std.allocator.allocate[fn.Block](?a, 1);
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
     if (is_err[*fn.Block, str](r)) { ret 0; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
@@ -333,7 +334,7 @@ test "verify: valid function passes" {
 }
 
 test "verify: empty function fails" {
-    var a: std.allocator.Allocator = std.allocator.default();
+    var a: allocator.Allocator = allocator.default();
     var func: fn.Function = fn.func_init(?a, "empty");
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
@@ -342,11 +343,11 @@ test "verify: empty function fails" {
 }
 
 test "verify: missing terminator fails" {
-    var a: std.allocator.Allocator = std.allocator.default();
+    var a: allocator.Allocator = allocator.default();
     var func: fn.Function = fn.func_init(?a, "noterm");
 
     val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
-    val r: Result[*fn.Block, str] = std.allocator.allocate[fn.Block](?a, 1);
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
     if (is_err[*fn.Block, str](r)) { ret 0; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
@@ -361,10 +362,10 @@ test "verify: missing terminator fails" {
 }
 
 test "verify: bad label index fails" {
-    var a: std.allocator.Allocator = std.allocator.default();
+    var a: allocator.Allocator = allocator.default();
     var func: fn.Function = fn.func_init(?a, "badlbl");
 
-    val r: Result[*fn.Block, str] = std.allocator.allocate[fn.Block](?a, 1);
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
     if (is_err[*fn.Block, str](r)) { ret 0; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
@@ -379,10 +380,10 @@ test "verify: bad label index fails" {
 }
 
 test "verify: trap instruction passes" {
-    var a: std.allocator.Allocator = std.allocator.default();
+    var a: allocator.Allocator = allocator.default();
     var func: fn.Function = fn.func_init(?a, "trap");
 
-    val r: Result[*fn.Block, str] = std.allocator.allocate[fn.Block](?a, 1);
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
     if (is_err[*fn.Block, str](r)) { ret 0; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
@@ -397,11 +398,11 @@ test "verify: trap instruction passes" {
 }
 
 test "verify: terminator mid-block fails" {
-    var a: std.allocator.Allocator = std.allocator.default();
+    var a: allocator.Allocator = allocator.default();
     var func: fn.Function = fn.func_init(?a, "midterm");
 
     val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
-    val r: Result[*fn.Block, str] = std.allocator.allocate[fn.Block](?a, 1);
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
     if (is_err[*fn.Block, str](r)) { ret 0; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
