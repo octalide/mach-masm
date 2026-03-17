@@ -74,7 +74,7 @@ pub fun make_meta(cc: u8, size: u8, flag: u8) u8 {
 # ---
 # inst: pointer to instruction
 # ret:  condition code (4 bits, 0..15)
-pub fun cc(inst: &Instruction) u8 {
+pub fun cc(inst: *Instruction) u8 {
     ret (inst.meta >> 4) & 0xF;
 }
 
@@ -82,7 +82,7 @@ pub fun cc(inst: &Instruction) u8 {
 # ---
 # inst: pointer to instruction
 # ret:  size in bytes (1, 2, 4, 8, 16, 32, 64, or 128)
-pub fun size(inst: &Instruction) u8 {
+pub fun size(inst: *Instruction) u8 {
     ret decode_size((inst.meta >> 1) & 0x7);
 }
 
@@ -90,7 +90,7 @@ pub fun size(inst: &Instruction) u8 {
 # ---
 # inst: pointer to instruction
 # ret:  flag bit (0 or 1)
-pub fun flag(inst: &Instruction) u8 {
+pub fun flag(inst: *Instruction) u8 {
     ret inst.meta & 1;
 }
 
@@ -98,25 +98,25 @@ pub fun flag(inst: &Instruction) u8 {
 # ---
 # inst: pointer to instruction
 # ret:  register ID from f0
-pub fun dst_reg(inst: &Instruction) u16 { ret inst.f0; }
+pub fun dst_reg(inst: *Instruction) u16 { ret inst.f0; }
 
 # src1_reg: read field f1 as a register ID
 # ---
 # inst: pointer to instruction
 # ret:  register ID from f1
-pub fun src1_reg(inst: &Instruction) u16 { ret inst.f1; }
+pub fun src1_reg(inst: *Instruction) u16 { ret inst.f1; }
 
 # src2_reg: read field f2 as a register ID
 # ---
 # inst: pointer to instruction
 # ret:  register ID from f2
-pub fun src2_reg(inst: &Instruction) u16 { ret inst.f2; }
+pub fun src2_reg(inst: *Instruction) u16 { ret inst.f2; }
 
 # label_idx: read field f2 as a label table index
 # ---
 # inst: pointer to instruction
 # ret:  label table index from f2
-pub fun label_idx(inst: &Instruction) i32 { ret inst.f2::i32; }
+pub fun label_idx(inst: *Instruction) i32 { ret inst.f2::i32; }
 
 # encode_scale: encode a memory index scale factor as a 2-bit log2 value
 # ---

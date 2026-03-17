@@ -67,7 +67,7 @@ pub fun verify_function(func: *fn.Function) Result[bool, str] {
 
         var ii: i32 = 0;
         for (ii < blk.inst_count) {
-            val i: &inst.Instruction = ?blk.insts[ii];
+            val i: *inst.Instruction = ?blk.insts[ii];
             val r: Result[bool, str] = verify_inst(i, ii, lbl_count, con_count, data_len, td_count);
             if (is_err[bool, str](r)) { ret r; }
 
@@ -84,7 +84,7 @@ pub fun verify_function(func: *fn.Function) Result[bool, str] {
             ii = ii + 1;
         }
 
-        val last: &inst.Instruction = ?blk.insts[blk.inst_count - 1];
+        val last: *inst.Instruction = ?blk.insts[blk.inst_count - 1];
         if (!is_terminator(last.op, inst.cc(last), inst.flag(last))) {
             ret err[bool, str]("block does not end with terminator");
         }
@@ -105,7 +105,7 @@ fun is_terminator(o: u8, cc: u8, flag: u8) bool {
     ret false;
 }
 
-fun verify_inst(i: &inst.Instruction, idx: i32,
+fun verify_inst(i: *inst.Instruction, idx: i32,
                 lbl_count: i32, con_count: i32,
                 data_len: i32, td_count: i32) Result[bool, str] {
     val o:    u8 = i.op;
@@ -161,7 +161,7 @@ fun verify_inst(i: &inst.Instruction, idx: i32,
     ret ok[bool, str](true);
 }
 
-fun verify_mov(i: &inst.Instruction, cc: u8, flag: u8,
+fun verify_mov(i: *inst.Instruction, cc: u8, flag: u8,
                data_len: i32, con_count: i32) Result[bool, str] {
     if (cc == 1 && flag == 0) {
         if (i.f2::i32 >= data_len && data_len > 0) {
@@ -178,7 +178,7 @@ fun verify_mov(i: &inst.Instruction, cc: u8, flag: u8,
     ret ok[bool, str](true);
 }
 
-fun verify_load_store(i: &inst.Instruction, flag: u8,
+fun verify_load_store(i: *inst.Instruction, flag: u8,
                       data_len: i32) Result[bool, str] {
     if (data_len > 0 && i.f2::i32 >= data_len) {
         ret err[bool, str]("load/store f2 exceeds data pool");
@@ -186,7 +186,7 @@ fun verify_load_store(i: &inst.Instruction, flag: u8,
     ret ok[bool, str](true);
 }
 
-fun verify_addr(i: &inst.Instruction, cc: u8, flag: u8,
+fun verify_addr(i: *inst.Instruction, cc: u8, flag: u8,
                 data_len: i32, lbl_count: i32) Result[bool, str] {
     if (cc == 1 && flag == 0) {
         if (i.f2::i32 >= lbl_count && lbl_count > 0) {
@@ -200,7 +200,7 @@ fun verify_addr(i: &inst.Instruction, cc: u8, flag: u8,
     ret ok[bool, str](true);
 }
 
-fun verify_alu(i: &inst.Instruction, flag: u8,
+fun verify_alu(i: *inst.Instruction, flag: u8,
                con_count: i32) Result[bool, str] {
     if (flag == 1) {
         if (con_count > 0 && i.f2::i32 >= con_count) {
@@ -210,7 +210,7 @@ fun verify_alu(i: &inst.Instruction, flag: u8,
     ret ok[bool, str](true);
 }
 
-fun verify_jmp(i: &inst.Instruction, lbl_count: i32) Result[bool, str] {
+fun verify_jmp(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0) {
         ret err[bool, str]("jmp f0/f1 must be zero");
     }
@@ -220,14 +220,14 @@ fun verify_jmp(i: &inst.Instruction, lbl_count: i32) Result[bool, str] {
     ret ok[bool, str](true);
 }
 
-fun verify_branch(i: &inst.Instruction, lbl_count: i32) Result[bool, str] {
+fun verify_branch(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
         ret err[bool, str]("branch f2 exceeds label table");
     }
     ret ok[bool, str](true);
 }
 
-fun verify_call(i: &inst.Instruction, flag: u8,
+fun verify_call(i: *inst.Instruction, flag: u8,
                 lbl_count: i32) Result[bool, str] {
     if (flag == 0) {
         if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
@@ -242,7 +242,7 @@ fun verify_call(i: &inst.Instruction, flag: u8,
     ret ok[bool, str](true);
 }
 
-fun verify_ret(i: &inst.Instruction, sz: u8, td_count: i32) Result[bool, str] {
+fun verify_ret(i: *inst.Instruction, sz: u8, td_count: i32) Result[bool, str] {
     if (sz <= 1 && i.f0 == 0 && i.f1 == 0 && i.f2 == 0) {
         ret ok[bool, str](true);
     }
@@ -252,7 +252,7 @@ fun verify_ret(i: &inst.Instruction, sz: u8, td_count: i32) Result[bool, str] {
     ret ok[bool, str](true);
 }
 
-fun verify_label(i: &inst.Instruction, lbl_count: i32) Result[bool, str] {
+fun verify_label(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0) {
         ret err[bool, str]("label f0/f1 must be zero");
     }
@@ -262,14 +262,14 @@ fun verify_label(i: &inst.Instruction, lbl_count: i32) Result[bool, str] {
     ret ok[bool, str](true);
 }
 
-fun verify_syscall(i: &inst.Instruction) Result[bool, str] {
+fun verify_syscall(i: *inst.Instruction) Result[bool, str] {
     if (i.f1 != 0 || i.f2 != 0) {
         ret err[bool, str]("syscall f1/f2 must be zero");
     }
     ret ok[bool, str](true);
 }
 
-fun verify_arg(i: &inst.Instruction, flag: u8, td_count: i32) Result[bool, str] {
+fun verify_arg(i: *inst.Instruction, flag: u8, td_count: i32) Result[bool, str] {
     if (flag == 0) {
         if (td_count > 0 && i.f2::i32 >= td_count) {
             ret err[bool, str]("arg f2 exceeds type descriptor table");
@@ -278,35 +278,35 @@ fun verify_arg(i: &inst.Instruction, flag: u8, td_count: i32) Result[bool, str] 
     ret ok[bool, str](true);
 }
 
-fun verify_param(i: &inst.Instruction, td_count: i32) Result[bool, str] {
+fun verify_param(i: *inst.Instruction, td_count: i32) Result[bool, str] {
     if (td_count > 0 && i.f2::i32 >= td_count) {
         ret err[bool, str]("param f2 exceeds type descriptor table");
     }
     ret ok[bool, str](true);
 }
 
-fun verify_pool_f2(i: &inst.Instruction, data_len: i32, name: str) Result[bool, str] {
+fun verify_pool_f2(i: *inst.Instruction, data_len: i32, name: str) Result[bool, str] {
     if (data_len > 0 && i.f2::i32 >= data_len) {
         ret err[bool, str]("f2 exceeds data pool");
     }
     ret ok[bool, str](true);
 }
 
-fun verify_fence(i: &inst.Instruction) Result[bool, str] {
+fun verify_fence(i: *inst.Instruction) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0 || i.f2 != 0) {
         ret err[bool, str]("fence fields must be zero");
     }
     ret ok[bool, str](true);
 }
 
-fun verify_trap(i: &inst.Instruction) Result[bool, str] {
+fun verify_trap(i: *inst.Instruction) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0 || i.f2 != 0 || i.meta != 0) {
         ret err[bool, str]("trap fields and meta must be zero");
     }
     ret ok[bool, str](true);
 }
 
-fun verify_hint(i: &inst.Instruction) Result[bool, str] {
+fun verify_hint(i: *inst.Instruction) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0 || i.f2 != 0) {
         ret err[bool, str]("hint fields must be zero");
     }
