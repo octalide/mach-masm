@@ -94,8 +94,9 @@ pub val OP_FENCE:        Operator = 27;
 # trap and hints
 pub val OP_TRAP:    Operator = 28;
 pub val OP_HINT:    Operator = 29;
+pub val OP_ISA_ASM: Operator = 30;
 
-pub val OP_COUNT: u8 = 30;
+pub val OP_COUNT: u8 = 31;
 
 # canonical opcode range boundary: all opcodes <= OP_CANONICAL_MAX are
 # part of the MASM IR spec. compiler-internal extensions must use values

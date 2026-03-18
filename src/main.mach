@@ -29,7 +29,7 @@ fun print_usage() {
     print.eprintln("  help                                    print this message");
 }
 
-fun find_flag(argc: i64, argv: &*u8, flag: str) str {
+fun find_flag(argc: i64, argv: **u8, flag: str) str {
     var i: i64 = 0;
     for (i < argc - 1) {
         if (str_equals(argv[i], flag)) {
@@ -40,7 +40,7 @@ fun find_flag(argc: i64, argv: &*u8, flag: str) str {
     ret nil;
 }
 
-fun cmd_compile(argc: i64, argv: &*u8) i64 {
+fun cmd_compile(argc: i64, argv: **u8) i64 {
     if (argc < 3) {
         print.eprintln("error: compile requires an input file");
         print_usage();
@@ -74,7 +74,7 @@ fun cmd_compile(argc: i64, argv: &*u8) i64 {
     ret 0;
 }
 
-fun cmd_print(argc: i64, argv: &*u8) i64 {
+fun cmd_print(argc: i64, argv: **u8) i64 {
     if (argc < 3) {
         print.eprintln("error: print requires an input file");
         print_usage();
@@ -107,7 +107,7 @@ fun cmd_print(argc: i64, argv: &*u8) i64 {
     ret 0;
 }
 
-fun cmd_info(argc: i64, argv: &*u8) i64 {
+fun cmd_info(argc: i64, argv: **u8) i64 {
     if (argc < 3) {
         print.eprintln("error: info requires an input file");
         print_usage();
@@ -170,7 +170,7 @@ fun cmd_info(argc: i64, argv: &*u8) i64 {
     ret 0;
 }
 
-fun cmd_verify(argc: i64, argv: &*u8) i64 {
+fun cmd_verify(argc: i64, argv: **u8) i64 {
     if (argc < 3) {
         print.eprintln("error: verify requires an input file");
         print_usage();
@@ -208,13 +208,13 @@ fun cmd_verify(argc: i64, argv: &*u8) i64 {
     ret 0;
 }
 
-fun cmd_help(argc: i64, argv: &*u8) i64 {
+fun cmd_help(argc: i64, argv: **u8) i64 {
     print_usage();
     ret 0;
 }
 
 $main.symbol = "main";
-fun main(argc: i64, argv: &*u8) i64 {
+fun main(argc: i64, argv: **u8) i64 {
     if (argc < 2) {
         print_usage();
         ret 1;

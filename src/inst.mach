@@ -539,6 +539,10 @@ pub fun make_trap() Instruction {
     ret mk(op.OP_TRAP, 0, 0, 0, 0);
 }
 
+pub fun make_isa_asm(label_idx: u16) Instruction {
+    ret mk(op.OP_ISA_ASM, 0, 0, 0, label_idx);
+}
+
 # make_hint: CPU hint instruction
 # ---
 # kind: hint kind (HINT_PAUSE, etc.)
