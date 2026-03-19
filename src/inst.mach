@@ -259,14 +259,14 @@ pub fun make_conv_ftoi(dst: u16, src: u16, dst_size: u8, src_float_size: u8) Ins
     ret mk(op.OP_CONV, make_meta(op.CONV_FTOI, dst_size, 0), dst, src, src_float_size::u16);
 }
 
-# make_mov_reg: register-to-register copy (OP_MOV reg-reg)
+# make_mov_reg: register-to-register move (OP_MOVE reg-reg)
 # ---
 # dst:  destination register
 # src:  source register
 # size: operation size in bytes
 # ret:  constructed instruction
 pub fun make_mov_reg(dst: u16, src: u16, size: u8) Instruction {
-    ret mk(op.OP_MOV, make_meta(0, size, 0), dst, src, 0);
+    ret mk(op.OP_MOVE, make_meta(0, size, 0), dst, src, 0);
 }
 
 # make_mov_imm32: move a 32-bit immediate from the data pool into a register
@@ -276,7 +276,7 @@ pub fun make_mov_reg(dst: u16, src: u16, size: u8) Instruction {
 # size:     operation size in bytes
 # ret:      constructed instruction
 pub fun make_mov_imm32(dst: u16, pool_off: u16, size: u8) Instruction {
-    ret mk(op.OP_MOV, make_meta(1, size, 0), dst, 0, pool_off);
+    ret mk(op.OP_MOVE, make_meta(1, size, 0), dst, 0, pool_off);
 }
 
 # make_mov_imm64: move a 64-bit immediate from the constant pool into a register
@@ -286,7 +286,7 @@ pub fun make_mov_imm32(dst: u16, pool_off: u16, size: u8) Instruction {
 # size:     operation size in bytes
 # ret:      constructed instruction
 pub fun make_mov_imm64(dst: u16, pool_off: u16, size: u8) Instruction {
-    ret mk(op.OP_MOV, make_meta(0, size, 1), dst, 0, pool_off);
+    ret mk(op.OP_MOVE, make_meta(0, size, 1), dst, 0, pool_off);
 }
 
 # make_load: load from memory at base+displacement
@@ -368,12 +368,22 @@ pub fun make_addr_label(dst: u16, lbl_idx: u16, size: u8) Instruction {
     ret mk(op.OP_ADDR, make_meta(1, size, 0), dst, 0, lbl_idx);
 }
 
+# make_copy: block memory copy
+# ---
+# dst:      register holding destination address
+# src:      register holding source address
+# size_off: data pool byte offset containing the u32 byte count
+# ret:      constructed instruction
+pub fun make_copy(dst: u16, src: u16, size_off: u16) Instruction {
+    ret mk(op.OP_COPY, 0, dst, src, size_off);
+}
+
 # make_jmp: unconditional jump to a label
 # ---
 # lbl_idx: label table index for the target
 # ret:     constructed instruction
 pub fun make_jmp(lbl_idx: u16) Instruction {
-    ret mk(op.OP_JMP, 0, 0, 0, lbl_idx);
+    ret mk(op.OP_JUMP, 0, 0, 0, lbl_idx);
 }
 
 # make_branch: conditional branch to a label
@@ -644,7 +654,7 @@ test "inst: make_cmp carries condition code" {
 test "inst: make_jmp and make_label use f2 as label index" {
     val j: Instruction = make_jmp(7);
     val l: Instruction = make_label(7);
-    if (j.op != op.OP_JMP) { ret 0; }
+    if (j.op != op.OP_JUMP) { ret 0; }
     if (label_idx(?j) != 7) { ret 0; }
     if (l.op != op.OP_LABEL) { ret 0; }
     if (label_idx(?l) != 7) { ret 0; }

@@ -79,7 +79,7 @@ fun block_successors(func: *fn.Function, blk: *fn.Block, block_idx: u16,
 
     val last: *inst.Instruction = ?blk.insts[blk.inst_count - 1];
 
-    if (last.op == op.OP_JMP) {
+    if (last.op == op.OP_JUMP) {
         val target: i32 = resolve_label(func, inst.label_idx(last), label_map);
         if (target >= 0) {
             out[0] = target::u16;
@@ -628,12 +628,12 @@ fun find_max_reg(cfg: *CFG) u16 {
             val ins: *inst.Instruction = ?blk.insts[ii];
             val o: u8 = ins.op;
             # skip opcodes with no register operands
-            if (o != op.OP_JMP && o != op.OP_LABEL && o != op.OP_FENCE &&
+            if (o != op.OP_JUMP && o != op.OP_LABEL && o != op.OP_FENCE &&
                 o != op.OP_TRAP && o != op.OP_HINT && o != op.OP_PARAM) {
                 if (ins.f0 > max_reg) { max_reg = ins.f0; }
             }
             # f1 is a register for memory, ALU, CONV, ARG, atomics, indirect CALL
-            if ((o >= op.OP_MOV && o <= op.OP_CMP) || o == op.OP_CONV ||
+            if ((o >= op.OP_MOVE && o <= op.OP_CMP) || o == op.OP_CONV ||
                 o == op.OP_ARG || (o >= op.OP_ATOMIC_LOAD && o <= op.OP_ATOMIC_RMW)) {
                 if (ins.f1 > max_reg) { max_reg = ins.f1; }
             }
@@ -668,7 +668,7 @@ fun compute_block_def_use(blk: *fn.Block, def_set: *RegSet, use_set: *RegSet) {
             w0 = true; r1 = true;
             if (inst.flag(ins) == 0) { r2 = true; }
         }
-        if (o == op.OP_MOV) {
+        if (o == op.OP_MOVE) {
             w0 = true;
             if (inst.cc(ins) == 0 && inst.flag(ins) == 0) { r1 = true; }
         }

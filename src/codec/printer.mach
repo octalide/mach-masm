@@ -242,7 +242,7 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
         ret;
     }
 
-    if (o == op.OP_JMP) {
+    if (o == op.OP_JUMP) {
         write_str(buf, "jmp ");
         write_label(buf, f, inst.label_idx(i));
         write_str(buf, "\n");
@@ -278,7 +278,7 @@ fun print_inst(buf: *bytebuf.WriteBuf, f: *fn.Function, i: *inst.Instruction) {
         ret;
     }
 
-    if (o == op.OP_MOV) {
+    if (o == op.OP_MOVE) {
         print_mov(buf, f, i);
         ret;
     }

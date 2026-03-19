@@ -11,7 +11,7 @@ pub def Operator: u8;
 pub def Cond:     u8;
 
 # data movement
-pub val OP_MOV:     Operator = 0;
+pub val OP_MOVE:    Operator = 0;
 pub val OP_LOAD:    Operator = 1;
 pub val OP_STORE:   Operator = 2;
 pub val OP_ADDR:    Operator = 3;
@@ -42,7 +42,7 @@ pub val OP_SHR:     Operator = 12;
 pub val OP_CMP:     Operator = 13;
 
 # control flow
-pub val OP_JMP:     Operator = 14;
+pub val OP_JUMP:     Operator = 14;
 pub val OP_BRANCH:  Operator = 15;
 pub val OP_CALL:    Operator = 16;
 pub val OP_RET:     Operator = 17;
@@ -94,14 +94,22 @@ pub val OP_FENCE:        Operator = 27;
 # trap and hints
 pub val OP_TRAP:    Operator = 28;
 pub val OP_HINT:    Operator = 29;
-pub val OP_ISA_ASM: Operator = 30;
 
-pub val OP_COUNT: u8 = 31;
+# block memory copy
+#
+# copy dst, src, size    copy bytes from [src] to [dst]
+#
+# f0=dst register, f1=src register, f2=data pool offset containing
+# the u32 byte count. the ISel expands this into the target's
+# preferred bulk-copy sequence (rep movsb, ldp/stp pairs, loop, etc.).
+pub val OP_COPY:    Operator = 30;
 
-# canonical opcode range boundary: all opcodes <= OP_CANONICAL_MAX are
-# part of the MASM IR spec. compiler-internal extensions must use values
-# strictly above this.
-pub val OP_CANONICAL_MAX: Operator = 29;
+pub val OP_CANONICAL_MAX: Operator = 30;
+
+# compiler-internal (above canonical range)
+pub val OP_ISA_ASM: Operator = 31;
+
+pub val OP_COUNT: u8 = 32;
 
 # condition codes (stored in meta cc field for cmp and branch)
 pub val CC_NONE: Cond = 0;
@@ -165,7 +173,7 @@ pub val RMW_XCHG: u8 = 5;
 # op:  opcode
 # ret: name string, or "unknown" for invalid opcodes
 pub fun op_name(op: Operator) str {
-    if (op == OP_MOV)          { ret "mov"; }
+    if (op == OP_MOVE)         { ret "move"; }
     if (op == OP_LOAD)         { ret "load"; }
     if (op == OP_STORE)        { ret "store"; }
     if (op == OP_ADDR)         { ret "addr"; }
@@ -179,7 +187,7 @@ pub fun op_name(op: Operator) str {
     if (op == OP_SHL)          { ret "shl"; }
     if (op == OP_SHR)          { ret "shr"; }
     if (op == OP_CMP)          { ret "cmp"; }
-    if (op == OP_JMP)          { ret "jmp"; }
+    if (op == OP_JUMP)         { ret "jump"; }
     if (op == OP_BRANCH)       { ret "branch"; }
     if (op == OP_CALL)         { ret "call"; }
     if (op == OP_RET)          { ret "ret"; }
@@ -195,6 +203,8 @@ pub fun op_name(op: Operator) str {
     if (op == OP_FENCE)        { ret "fence"; }
     if (op == OP_TRAP)         { ret "trap"; }
     if (op == OP_HINT)         { ret "hint"; }
+    if (op == OP_COPY)         { ret "copy"; }
+    if (op == OP_ISA_ASM)      { ret "isa_asm"; }
     ret "unknown";
 }
 
@@ -349,7 +359,7 @@ pub fun is_valid_cc(o: u8, cc: u8) bool {
         ret is_valid_mo(cc);
     }
 
-    if (o == OP_MOV) { ret cc <= 1; }
+    if (o == OP_MOVE) { ret cc <= 1; }
     if (o == OP_ADDR) { ret cc <= 1; }
 
     if (o == OP_LOAD || o == OP_STORE) { ret cc <= 3; }
