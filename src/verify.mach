@@ -39,10 +39,6 @@ pub fun verify_module(m: *mod.Module) Result[bool, str] {
     ret ok[bool, str](true);
 }
 
-# verify_function: validate all blocks and instructions in a function
-# ---
-# func: pointer to function
-# ret:  ok(true) if valid, or err with description of first violation
 pub fun verify_function(func: *fn.Function) Result[bool, str] {
     if (func == nil) { ret err[bool, str]("nil function"); }
 
