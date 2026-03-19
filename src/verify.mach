@@ -96,7 +96,6 @@ fun is_terminator(o: u8, cc: u8, flag: u8) bool {
     if (o == op.OP_RET)  { ret true; }
     if (o == op.OP_TRAP) { ret true; }
     if (o == op.OP_BRANCH) { ret true; }
-    if (o == op.OP_ISA_ASM) { ret true; }
     if (o == op.OP_CALL && cc == op.CALL_TAIL && flag == 0) { ret true; }
     if (o == op.OP_CALL && cc == op.CALL_TAIL && flag == 1) { ret true; }
     ret false;
@@ -243,7 +242,7 @@ fun verify_ret(i: *inst.Instruction, sz: u8, td_count: i32) Result[bool, str] {
     if (sz <= 1 && i.f0 == 0 && i.f1 == 0 && i.f2 == 0) {
         ret ok[bool, str](true);
     }
-    if (td_count > 0 && i.f2::i32 >= td_count) {
+    if (i.f2 != 0xFFFF && td_count > 0 && i.f2::i32 >= td_count) {
         ret err[bool, str]("ret.value f2 exceeds type descriptor table");
     }
     ret ok[bool, str](true);
@@ -268,7 +267,7 @@ fun verify_syscall(i: *inst.Instruction) Result[bool, str] {
 
 fun verify_arg(i: *inst.Instruction, flag: u8, td_count: i32) Result[bool, str] {
     if (flag == 0) {
-        if (td_count > 0 && i.f2::i32 >= td_count) {
+        if (i.f2 != 0xFFFF && td_count > 0 && i.f2::i32 >= td_count) {
             ret err[bool, str]("arg f2 exceeds type descriptor table");
         }
     }
@@ -276,7 +275,7 @@ fun verify_arg(i: *inst.Instruction, flag: u8, td_count: i32) Result[bool, str] 
 }
 
 fun verify_param(i: *inst.Instruction, td_count: i32) Result[bool, str] {
-    if (td_count > 0 && i.f2::i32 >= td_count) {
+    if (i.f2 != 0xFFFF && td_count > 0 && i.f2::i32 >= td_count) {
         ret err[bool, str]("param f2 exceeds type descriptor table");
     }
     ret ok[bool, str](true);
