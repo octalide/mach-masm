@@ -92,7 +92,7 @@ pub fun verify_function(func: *fn.Function) Result[bool, str] {
 }
 
 fun is_terminator(o: u8, cc: u8, flag: u8) bool {
-    if (o == op.OP_JMP)  { ret true; }
+    if (o == op.OP_JUMP)  { ret true; }
     if (o == op.OP_RET)  { ret true; }
     if (o == op.OP_TRAP) { ret true; }
     if (o == op.OP_BRANCH) { ret true; }
@@ -122,7 +122,7 @@ fun verify_inst(i: *inst.Instruction, idx: i32,
         ret err[bool, str]("flag must be 0 or 1");
     }
 
-    if (o == op.OP_MOV) { ret verify_mov(i, cc, flag, data_len, con_count); }
+    if (o == op.OP_MOVE) { ret verify_mov(i, cc, flag, data_len, con_count); }
     if (o == op.OP_LOAD || o == op.OP_STORE) { ret verify_load_store(i, flag, data_len); }
     if (o == op.OP_ADDR) { ret verify_addr(i, cc, flag, data_len, lbl_count); }
 
@@ -135,7 +135,7 @@ fun verify_inst(i: *inst.Instruction, idx: i32,
     if (o == op.OP_CMP) { ret verify_alu(i, flag, con_count); }
     if (o == op.OP_CONV) { ret ok[bool, str](true); }
 
-    if (o == op.OP_JMP) { ret verify_jmp(i, lbl_count); }
+    if (o == op.OP_JUMP) { ret verify_jmp(i, lbl_count); }
     if (o == op.OP_BRANCH) { ret verify_branch(i, lbl_count); }
     if (o == op.OP_CALL) { ret verify_call(i, flag, lbl_count); }
     if (o == op.OP_RET) { ret verify_ret(i, sz, td_count); }

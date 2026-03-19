@@ -420,7 +420,7 @@ fun parse_data_decl(alloc: *allocator.Allocator, l: *Lexer) Result[data.DataDecl
 # handles compound opcodes like "atomic.load" by consuming multiple tokens.
 # after return, l.cur points to the token AFTER the opcode.
 fun lookup_op(l: *Lexer) u8 {
-    if (tok_str_equals(?l.cur, "mov")) { lex_next(l); ret op.OP_MOV; }
+    if (tok_str_equals(?l.cur, "mov")) { lex_next(l); ret op.OP_MOVE; }
     if (tok_str_equals(?l.cur, "load")) { lex_next(l); ret op.OP_LOAD; }
     if (tok_str_equals(?l.cur, "store")) { lex_next(l); ret op.OP_STORE; }
     if (tok_str_equals(?l.cur, "addr")) { lex_next(l); ret op.OP_ADDR; }
@@ -434,7 +434,7 @@ fun lookup_op(l: *Lexer) u8 {
     if (tok_str_equals(?l.cur, "shl")) { lex_next(l); ret op.OP_SHL; }
     if (tok_str_equals(?l.cur, "shr")) { lex_next(l); ret op.OP_SHR; }
     if (tok_str_equals(?l.cur, "cmp")) { lex_next(l); ret op.OP_CMP; }
-    if (tok_str_equals(?l.cur, "jmp")) { lex_next(l); ret op.OP_JMP; }
+    if (tok_str_equals(?l.cur, "jmp")) { lex_next(l); ret op.OP_JUMP; }
     if (tok_str_equals(?l.cur, "branch")) { lex_next(l); ret op.OP_BRANCH; }
     if (tok_str_equals(?l.cur, "call")) { lex_next(l); ret op.OP_CALL; }
     if (tok_str_equals(?l.cur, "ret")) { lex_next(l); ret op.OP_RET; }
@@ -680,7 +680,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         ret ok[bool, str](true);
     }
 
-    if (o == op.OP_JMP) {
+    if (o == op.OP_JUMP) {
         val lbl: u16 = parse_label_ref(alloc, l, f);
         fn.block_append(alloc, blk, inst.make_jmp(lbl));
         expect_newline(l);
@@ -721,7 +721,7 @@ fun parse_inst(alloc: *allocator.Allocator, l: *Lexer, f: *fn.Function,
         ret ok[bool, str](true);
     }
 
-    if (o == op.OP_MOV) {
+    if (o == op.OP_MOVE) {
         val sz: u8 = parse_size_suffix(l);
         val dst: u16 = parse_reg(l);
         expect_comma(l);

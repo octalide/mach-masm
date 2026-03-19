@@ -283,7 +283,7 @@ test "codec: binary round-trip preserves opcode sequence" {
     val b: *fn.Block = f.blocks.data[0];
     if (b.inst_count != 5) { ret 0; }
     if (b.insts[0].op != op.OP_LABEL) { ret 0; }
-    if (b.insts[1].op != op.OP_MOV) { ret 0; }
+    if (b.insts[1].op != op.OP_MOVE) { ret 0; }
     if (b.insts[2].op != op.OP_LOAD) { ret 0; }
     if (b.insts[3].op != op.OP_ADD) { ret 0; }
     if (b.insts[4].op != op.OP_RET) { ret 0; }
@@ -348,7 +348,7 @@ test "codec: text round-trip preserves opcodes" {
     if (f.blocks.len < 1) { ret 0; }
     val b: *fn.Block = f.blocks.data[0];
     if (b.inst_count != 4) { ret 0; }
-    if (b.insts[0].op != op.OP_MOV) { ret 0; }
+    if (b.insts[0].op != op.OP_MOVE) { ret 0; }
     if (b.insts[1].op != op.OP_LOAD) { ret 0; }
     if (b.insts[2].op != op.OP_ADD) { ret 0; }
     if (b.insts[3].op != op.OP_RET) { ret 0; }
