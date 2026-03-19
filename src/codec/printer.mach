@@ -10,7 +10,7 @@ use std.types.result;
 use std.types.string;
 
 use allocator: std.allocator;
-use bytebuf:   std.io.bytebuf;
+use bytebuf:   std.io.buffer;
 use vec:       std.collections.vector;
 
 use op:   masm.op;
@@ -32,7 +32,7 @@ pub fun print(alloc: *allocator.Allocator, m: *mod.Module) Result[bytebuf.WriteB
         ret err[bytebuf.WriteBuf, str]("nil argument");
     }
 
-    var buf: bytebuf.WriteBuf = bytebuf.wbuf_init(alloc);
+    var buf: bytebuf.WriteBuf = bytebuf.wbuf_make(alloc);
 
     var di: usize = 0;
     for (di < m.data_decls.decls.len) {
