@@ -74,10 +74,6 @@ pub rec Function {
     labels:         pool.LabelTable;
     data_pool:      pool.DataPool;
     type_descs:     typedesc.TypeDescTable;
-    asm_local_names:  *str;
-    asm_local_offs:   *i32;
-    asm_local_sizes:  *u8;
-    asm_local_count:  i32;
 }
 
 pub val FUNC_VARIADIC:  u16 = 1;
@@ -197,10 +193,6 @@ pub fun func_init(alloc: *allocator.Allocator, name: str) Function {
     f.type_descs = typedesc.init(alloc);
     f.src_path = nil;
     f.frame_size = 0;
-    f.asm_local_names = nil;
-    f.asm_local_offs  = nil;
-    f.asm_local_sizes = nil;
-    f.asm_local_count = 0;
     ret f;
 }
 
