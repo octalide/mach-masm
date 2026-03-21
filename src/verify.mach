@@ -68,7 +68,7 @@ pub fun verify_function(func: *fn.Function) Result[bool, str] {
             if (is_err[bool, str](r)) { ret r; }
 
             if (ii < blk.inst_count - 1) {
-                if (is_terminator(i.op, inst.cc(i), inst.flag(i))) {
+                if (is_terminator(i.op, inst.cc(i), inst.flag(i)) && i.op != op.OP_ISA_ASM) {
                     ret err[bool, str]("terminator before end of block");
                 }
             }
