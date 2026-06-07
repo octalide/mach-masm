@@ -4,8 +4,9 @@
 # and flag fields. dot suffixes are a textual representation — the
 # binary encoding is unchanged (8-byte Instruction record).
 
-use std.types.bool;
-use std.types.string;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.string.str;
 
 pub def Operator: u8;
 pub def Cond:     u8;
@@ -368,56 +369,56 @@ pub fun is_valid_cc(o: u8, cc: u8) bool {
 }
 
 test "op: is_valid_div_mode" {
-    if (!is_valid_div_mode(DIV_QUOT))  { ret 0; }
-    if (!is_valid_div_mode(DIV_FLOAT)) { ret 0; }
-    if (is_valid_div_mode(5))          { ret 0; }
-    ret 1;
+    if (!is_valid_div_mode(DIV_QUOT))  { ret 1; }
+    if (!is_valid_div_mode(DIV_FLOAT)) { ret 1; }
+    if (is_valid_div_mode(5))          { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_conv_kind" {
-    if (!is_valid_conv_kind(CONV_ZEXT))   { ret 0; }
-    if (!is_valid_conv_kind(CONV_FTRUNC)) { ret 0; }
-    if (is_valid_conv_kind(7))            { ret 0; }
-    ret 1;
+    if (!is_valid_conv_kind(CONV_ZEXT))   { ret 1; }
+    if (!is_valid_conv_kind(CONV_FTRUNC)) { ret 1; }
+    if (is_valid_conv_kind(7))            { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_mo" {
-    if (!is_valid_mo(MO_RELAXED)) { ret 0; }
-    if (!is_valid_mo(MO_SEQ_CST)) { ret 0; }
-    if (is_valid_mo(5))           { ret 0; }
-    ret 1;
+    if (!is_valid_mo(MO_RELAXED)) { ret 1; }
+    if (!is_valid_mo(MO_SEQ_CST)) { ret 1; }
+    if (is_valid_mo(5))           { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_rmw_op" {
-    if (!is_valid_rmw_op(RMW_ADD))  { ret 0; }
-    if (!is_valid_rmw_op(RMW_XCHG)) { ret 0; }
-    if (is_valid_rmw_op(6))         { ret 0; }
-    ret 1;
+    if (!is_valid_rmw_op(RMW_ADD))  { ret 1; }
+    if (!is_valid_rmw_op(RMW_XCHG)) { ret 1; }
+    if (is_valid_rmw_op(6))         { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_cc for cmp accepts condition codes" {
-    if (!is_valid_cc(OP_CMP, CC_EQ))  { ret 0; }
-    if (!is_valid_cc(OP_CMP, CC_UGE)) { ret 0; }
-    if (is_valid_cc(OP_CMP, 11))      { ret 0; }
-    ret 1;
+    if (!is_valid_cc(OP_CMP, CC_EQ))  { ret 1; }
+    if (!is_valid_cc(OP_CMP, CC_UGE)) { ret 1; }
+    if (is_valid_cc(OP_CMP, 11))      { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_cc for add accepts 0 and ALU_FLOAT" {
-    if (!is_valid_cc(OP_ADD, 0))         { ret 0; }
-    if (!is_valid_cc(OP_ADD, ALU_FLOAT)) { ret 0; }
-    if (is_valid_cc(OP_ADD, 2))          { ret 0; }
-    ret 1;
+    if (!is_valid_cc(OP_ADD, 0))         { ret 1; }
+    if (!is_valid_cc(OP_ADD, ALU_FLOAT)) { ret 1; }
+    if (is_valid_cc(OP_ADD, 2))          { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_cc for div accepts division modes" {
-    if (!is_valid_cc(OP_DIV, DIV_QUOT))  { ret 0; }
-    if (!is_valid_cc(OP_DIV, DIV_FLOAT)) { ret 0; }
-    if (is_valid_cc(OP_DIV, 5))          { ret 0; }
-    ret 1;
+    if (!is_valid_cc(OP_DIV, DIV_QUOT))  { ret 1; }
+    if (!is_valid_cc(OP_DIV, DIV_FLOAT)) { ret 1; }
+    if (is_valid_cc(OP_DIV, 5))          { ret 1; }
+    ret 0;
 }
 
 test "op: is_valid_cc for fence accepts memory orderings" {
-    if (!is_valid_cc(OP_FENCE, MO_SEQ_CST)) { ret 0; }
-    if (is_valid_cc(OP_FENCE, 5))           { ret 0; }
-    ret 1;
+    if (!is_valid_cc(OP_FENCE, MO_SEQ_CST)) { ret 1; }
+    if (is_valid_cc(OP_FENCE, 5))           { ret 1; }
+    ret 0;
 }

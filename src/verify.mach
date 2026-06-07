@@ -5,12 +5,20 @@
 # terminated, and per-opcode field constraints met. returns err with a
 # descriptive message on the first violation found.
 
-use std.types.bool;
-use std.types.size;
-use std.types.string;
-use std.types.result;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.bool.false;
+use std.types.size.usize;
+use std.types.string.str;
+use std.types.result.err;
+use std.types.result.is_err;
+use std.types.result.is_ok;
+use std.types.result.ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
 
 use allocator: std.allocator;
+use page:      std.allocator.page;
 use vec:       std.collections.vector;
 
 use op:       masm.op;
@@ -186,7 +194,7 @@ fun verify_load_store(i: *inst.Instruction, flag: u8,
 fun verify_addr(i: *inst.Instruction, cc: u8, flag: u8,
                 data_len: i32, lbl_count: i32) Result[bool, str] {
     if (cc == 1 && flag == 0) {
-        if (i.f2::i32 >= lbl_count && lbl_count > 0) {
+        if (i.f2::i32 >= lbl_count) {
             ret err[bool, str]("addr.label f2 exceeds label table");
         }
         ret ok[bool, str](true);
@@ -211,14 +219,14 @@ fun verify_jmp(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0) {
         ret err[bool, str]("jmp f0/f1 must be zero");
     }
-    if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+    if (i.f2::i32 >= lbl_count) {
         ret err[bool, str]("jmp f2 exceeds label table");
     }
     ret ok[bool, str](true);
 }
 
 fun verify_branch(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
-    if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+    if (i.f2::i32 >= lbl_count) {
         ret err[bool, str]("branch f2 exceeds label table");
     }
     ret ok[bool, str](true);
@@ -227,7 +235,7 @@ fun verify_branch(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
 fun verify_call(i: *inst.Instruction, flag: u8,
                 lbl_count: i32) Result[bool, str] {
     if (flag == 0) {
-        if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+        if (i.f2::i32 >= lbl_count) {
             ret err[bool, str]("call.direct f2 exceeds label table");
         }
     }
@@ -253,7 +261,7 @@ fun verify_label(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0) {
         ret err[bool, str]("label f0/f1 must be zero");
     }
-    if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+    if (i.f2::i32 >= lbl_count) {
         ret err[bool, str]("label f2 exceeds label table");
     }
     ret ok[bool, str](true);
@@ -311,12 +319,13 @@ fun verify_hint(i: *inst.Instruction) Result[bool, str] {
 }
 
 test "verify: valid function passes" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var func: fn.Function = fn.func_init(?a, "test");
 
     val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
     val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
-    if (is_err[*fn.Block, str](r)) { ret 0; }
+    if (is_err[*fn.Block, str](r)) { ret 1; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
 
@@ -326,26 +335,28 @@ test "verify: valid function passes" {
 
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
-    if (is_ok[bool, str](vr)) { ret 1; }
-    ret 0;
+    if (is_ok[bool, str](vr)) { ret 0; }
+    ret 1;
 }
 
 test "verify: empty function fails" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var func: fn.Function = fn.func_init(?a, "empty");
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
-    if (is_err[bool, str](vr)) { ret 1; }
-    ret 0;
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
 }
 
 test "verify: missing terminator fails" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var func: fn.Function = fn.func_init(?a, "noterm");
 
     val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
     val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
-    if (is_err[*fn.Block, str](r)) { ret 0; }
+    if (is_err[*fn.Block, str](r)) { ret 1; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
 
@@ -354,16 +365,17 @@ test "verify: missing terminator fails" {
 
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
-    if (is_err[bool, str](vr)) { ret 1; }
-    ret 0;
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
 }
 
 test "verify: bad label index fails" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var func: fn.Function = fn.func_init(?a, "badlbl");
 
     val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
-    if (is_err[*fn.Block, str](r)) { ret 0; }
+    if (is_err[*fn.Block, str](r)) { ret 1; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
 
@@ -372,16 +384,17 @@ test "verify: bad label index fails" {
 
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
-    if (is_err[bool, str](vr)) { ret 1; }
-    ret 0;
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
 }
 
 test "verify: trap instruction passes" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var func: fn.Function = fn.func_init(?a, "trap");
 
     val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
-    if (is_err[*fn.Block, str](r)) { ret 0; }
+    if (is_err[*fn.Block, str](r)) { ret 1; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
 
@@ -390,17 +403,18 @@ test "verify: trap instruction passes" {
 
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
-    if (is_ok[bool, str](vr)) { ret 1; }
-    ret 0;
+    if (is_ok[bool, str](vr)) { ret 0; }
+    ret 1;
 }
 
 test "verify: terminator mid-block fails" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var func: fn.Function = fn.func_init(?a, "midterm");
 
     val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
     val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
-    if (is_err[*fn.Block, str](r)) { ret 0; }
+    if (is_err[*fn.Block, str](r)) { ret 1; }
     val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
     @blk = fn.block_init(".entry");
 
@@ -410,6 +424,6 @@ test "verify: terminator mid-block fails" {
 
     val vr: Result[bool, str] = verify_function(?func);
     fn.func_dnit(?a, ?func);
-    if (is_err[bool, str](vr)) { ret 1; }
-    ret 0;
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
 }

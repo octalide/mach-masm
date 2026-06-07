@@ -8,9 +8,11 @@
 # MASM is the canonical source for these constants. object format
 # implementations consume them — they do not redefine them.
 
-use std.types.bool;
-use std.types.size;
-use std.types.string;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.bool.false;
+use std.types.size.usize;
+use std.types.string.str;
 
 pub def SymBinding: u8;
 

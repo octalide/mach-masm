@@ -3,13 +3,16 @@
 # packed null-terminated strings referenced by u32 byte offset.
 # deduplicates on intern. used by the binary .mo encoder/decoder.
 
-use std.types.bool;
-use std.types.size;
-use std.types.result;
-use std.types.string;
+use std.types.bool.bool;
+use std.types.result.is_ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
+use std.types.string.str;
+use std.types.string.str_equals;
 
 use allocator: std.allocator;
-use bytebuf:   std.io.bytebuf;
+use page:      std.allocator.page;
+use bytebuf:   std.io.buffer;
 use map:       std.collections.map;
 
 # Builder: string table builder for encoding
@@ -31,7 +34,7 @@ pub rec Builder {
 # ret:   initialized builder
 pub fun stb_init(alloc: *allocator.Allocator) Builder {
     var b: Builder;
-    b.buf = bytebuf.wbuf_init(alloc);
+    b.buf = bytebuf.wbuf_make(alloc);
     b.dedup = map.init[str, u32](alloc, map.hash_str, map.eq_str);
     ret b;
 }
@@ -128,26 +131,29 @@ pub fun str_get(r: *Reader, offset: u32) str {
 }
 
 test "strtab: intern returns offset for first string" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var b: Builder = stb_init(?a);
     val off: u32 = stb_intern(?b, "hello");
     stb_dnit(?b);
-    if (off == 0) { ret 1; }
-    ret 0;
+    if (off == 0) { ret 0; }
+    ret 1;
 }
 
 test "strtab: intern deduplicates same string" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var b: Builder = stb_init(?a);
     val o1: u32 = stb_intern(?b, "test");
     val o2: u32 = stb_intern(?b, "test");
     stb_dnit(?b);
-    if (o1 == o2) { ret 1; }
-    ret 0;
+    if (o1 == o2) { ret 0; }
+    ret 1;
 }
 
 test "strtab: reader retrieves interned string" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var b: Builder = stb_init(?a);
     val off: u32 = stb_intern(?b, "world");
     val data: *u8 = stb_data(?b);
@@ -156,12 +162,13 @@ test "strtab: reader retrieves interned string" {
     val s: str = str_get(?r, off);
     val eq: bool = str_equals(s, "world");
     stb_dnit(?b);
-    if (eq) { ret 1; }
-    ret 0;
+    if (eq) { ret 0; }
+    ret 1;
 }
 
 test "strtab: multiple strings have distinct offsets" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var b: Builder = stb_init(?a);
     val o1: u32 = stb_intern(?b, "alpha");
     val o2: u32 = stb_intern(?b, "beta");
@@ -173,6 +180,6 @@ test "strtab: multiple strings have distinct offsets" {
     val eq1: bool = str_equals(s1, "alpha");
     val eq2: bool = str_equals(s2, "beta");
     stb_dnit(?b);
-    if (o1 != o2 && eq1 && eq2) { ret 1; }
-    ret 0;
+    if (o1 != o2 && eq1 && eq2) { ret 0; }
+    ret 1;
 }
