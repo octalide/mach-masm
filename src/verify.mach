@@ -194,7 +194,7 @@ fun verify_load_store(i: *inst.Instruction, flag: u8,
 fun verify_addr(i: *inst.Instruction, cc: u8, flag: u8,
                 data_len: i32, lbl_count: i32) Result[bool, str] {
     if (cc == 1 && flag == 0) {
-        if (i.f2::i32 >= lbl_count && lbl_count > 0) {
+        if (i.f2::i32 >= lbl_count) {
             ret err[bool, str]("addr.label f2 exceeds label table");
         }
         ret ok[bool, str](true);
@@ -219,14 +219,14 @@ fun verify_jmp(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0) {
         ret err[bool, str]("jmp f0/f1 must be zero");
     }
-    if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+    if (i.f2::i32 >= lbl_count) {
         ret err[bool, str]("jmp f2 exceeds label table");
     }
     ret ok[bool, str](true);
 }
 
 fun verify_branch(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
-    if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+    if (i.f2::i32 >= lbl_count) {
         ret err[bool, str]("branch f2 exceeds label table");
     }
     ret ok[bool, str](true);
@@ -235,7 +235,7 @@ fun verify_branch(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
 fun verify_call(i: *inst.Instruction, flag: u8,
                 lbl_count: i32) Result[bool, str] {
     if (flag == 0) {
-        if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+        if (i.f2::i32 >= lbl_count) {
             ret err[bool, str]("call.direct f2 exceeds label table");
         }
     }
@@ -261,7 +261,7 @@ fun verify_label(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
     if (i.f0 != 0 || i.f1 != 0) {
         ret err[bool, str]("label f0/f1 must be zero");
     }
-    if (lbl_count > 0 && i.f2::i32 >= lbl_count) {
+    if (i.f2::i32 >= lbl_count) {
         ret err[bool, str]("label f2 exceeds label table");
     }
     ret ok[bool, str](true);
