@@ -7,12 +7,19 @@
 # data_get resolves it directly. pools own their backing memory and grow
 # geometrically.
 
-use std.types.bool;
-use std.types.size;
-use std.types.string;
-use std.types.result;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.bool.false;
+use std.types.size.usize;
+use std.types.string.str;
+use std.types.string.str_equals;
+use std.types.result.is_err;
+use std.types.result.is_ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
 
 use allocator: std.allocator;
+use page:      std.allocator.page;
 use dbg:       std.print;
 use map:       std.collections.map;
 
@@ -462,82 +469,90 @@ pub fun data_length(pool: *DataPool) i32 {
 }
 
 test "pool: const_intern returns index 0 for first value" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var p: ConstPool = const_init(?a);
     val idx: i32 = const_intern(?a, ?p, 42);
     const_dnit(?a, ?p);
-    if (idx == 0) { ret 1; }
-    ret 0;
+    if (idx == 0) { ret 0; }
+    ret 1;
 }
 
 test "pool: const_get retrieves interned value" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var p: ConstPool = const_init(?a);
     const_intern(?a, ?p, 12345);
     val v: u64 = const_get(?p, 0);
     const_dnit(?a, ?p);
-    if (v == 12345) { ret 1; }
-    ret 0;
+    if (v == 12345) { ret 0; }
+    ret 1;
 }
 
 test "pool: const_intern deduplicates same value" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var p: ConstPool = const_init(?a);
     val i0: i32 = const_intern(?a, ?p, 99);
     val i1: i32 = const_intern(?a, ?p, 99);
     const_dnit(?a, ?p);
-    if (i0 == i1) { ret 1; }
-    ret 0;
+    if (i0 == i1) { ret 0; }
+    ret 1;
 }
 
 test "pool: const_intern assigns different indices for different values" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var p: ConstPool = const_init(?a);
     val i0: i32 = const_intern(?a, ?p, 10);
     val i1: i32 = const_intern(?a, ?p, 20);
     const_dnit(?a, ?p);
-    if (i0 != i1) { ret 1; }
-    ret 0;
+    if (i0 != i1) { ret 0; }
+    ret 1;
 }
 
 test "pool: label_intern and label_get round-trip" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var t: LabelTable = label_init(?a);
     val idx: i32 = label_intern(?a, ?t, "entry");
     val name: str = label_get(?t, idx);
     label_dnit(?a, ?t);
-    if (str_equals(name, "entry")) { ret 1; }
-    ret 0;
+    if (str_equals(name, "entry")) { ret 0; }
+    ret 1;
 }
 
 test "pool: label_intern deduplicates same name" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var t: LabelTable = label_init(?a);
     val i0: i32 = label_intern(?a, ?t, "loop");
     val i1: i32 = label_intern(?a, ?t, "loop");
     label_dnit(?a, ?t);
-    if (i0 == i1) { ret 1; }
-    ret 0;
+    if (i0 == i1) { ret 0; }
+    ret 1;
 }
 
 test "pool: data_intern_i32 and data_get_i32 round-trip" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var p: DataPool = data_init(?a);
     val off: i32 = data_intern_i32(?a, ?p, 777);
     val v: i32 = data_get_i32(?p, off);
     data_dnit(?a, ?p);
-    if (v == 777) { ret 1; }
-    ret 0;
+    if (v == 777) { ret 0; }
+    ret 1;
 }
 
 test "pool: data_intern deduplicates identical bytes" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var p: DataPool = data_init(?a);
     var val1: i32 = 42;
     var val2: i32 = 42;
     val o1: i32 = data_intern(?a, ?p, (?val1)::*u8, 4);
     val o2: i32 = data_intern(?a, ?p, (?val2)::*u8, 4);
     data_dnit(?a, ?p);
-    if (o1 == o2) { ret 1; }
-    ret 0;
+    if (o1 == o2) { ret 0; }
+    ret 1;
 }

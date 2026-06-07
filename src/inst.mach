@@ -4,7 +4,9 @@
 # meta byte encoding/decoding, field accessors, and all shape-specific
 # constructors for building instructions from typed parameters.
 
-use std.types.bool;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.bool.false;
 
 use op: masm.op;
 
@@ -582,43 +584,43 @@ pub fun is_valid_size(size: u8) bool {
 }
 
 test "inst: is_valid_size accepts powers of two" {
-    if (!is_valid_size(1))   { ret 0; }
-    if (!is_valid_size(2))   { ret 0; }
-    if (!is_valid_size(4))   { ret 0; }
-    if (!is_valid_size(8))   { ret 0; }
-    if (!is_valid_size(16))  { ret 0; }
-    if (!is_valid_size(32))  { ret 0; }
-    if (!is_valid_size(64))  { ret 0; }
-    if (!is_valid_size(128)) { ret 0; }
-    ret 1;
+    if (!is_valid_size(1))   { ret 1; }
+    if (!is_valid_size(2))   { ret 1; }
+    if (!is_valid_size(4))   { ret 1; }
+    if (!is_valid_size(8))   { ret 1; }
+    if (!is_valid_size(16))  { ret 1; }
+    if (!is_valid_size(32))  { ret 1; }
+    if (!is_valid_size(64))  { ret 1; }
+    if (!is_valid_size(128)) { ret 1; }
+    ret 0;
 }
 
 test "inst: is_valid_size rejects non-powers and zero" {
-    if (is_valid_size(0))  { ret 0; }
-    if (is_valid_size(3))  { ret 0; }
-    if (is_valid_size(5))  { ret 0; }
-    if (is_valid_size(6))  { ret 0; }
-    if (is_valid_size(7))  { ret 0; }
-    if (is_valid_size(10)) { ret 0; }
-    ret 1;
+    if (is_valid_size(0))  { ret 1; }
+    if (is_valid_size(3))  { ret 1; }
+    if (is_valid_size(5))  { ret 1; }
+    if (is_valid_size(6))  { ret 1; }
+    if (is_valid_size(7))  { ret 1; }
+    if (is_valid_size(10)) { ret 1; }
+    ret 0;
 }
 
 test "inst: encode_size and decode_size round-trip" {
-    if (decode_size(encode_size(1)) != 1) { ret 0; }
-    if (decode_size(encode_size(2)) != 2) { ret 0; }
-    if (decode_size(encode_size(4)) != 4) { ret 0; }
-    if (decode_size(encode_size(8)) != 8) { ret 0; }
-    ret 1;
+    if (decode_size(encode_size(1)) != 1) { ret 1; }
+    if (decode_size(encode_size(2)) != 2) { ret 1; }
+    if (decode_size(encode_size(4)) != 4) { ret 1; }
+    if (decode_size(encode_size(8)) != 8) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_meta packs cc, size, flag correctly" {
     val m: u8 = make_meta(5, 4, 1);
     var i: Instruction;
     i.meta = m;
-    if (cc(?i) != 5) { ret 0; }
-    if (size(?i) != 4) { ret 0; }
-    if (flag(?i) != 1) { ret 0; }
-    ret 1;
+    if (cc(?i) != 5) { ret 1; }
+    if (size(?i) != 4) { ret 1; }
+    if (flag(?i) != 1) { ret 1; }
+    ret 0;
 }
 
 test "inst: flag bit isolation" {
@@ -628,116 +630,116 @@ test "inst: flag bit isolation" {
     var i1: Instruction;
     i0.meta = m0;
     i1.meta = m1;
-    if (flag(?i0) != 0) { ret 0; }
-    if (flag(?i1) != 1) { ret 0; }
-    ret 1;
+    if (flag(?i0) != 0) { ret 1; }
+    if (flag(?i1) != 1) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_alu field layout" {
     val i: Instruction = make_alu(op.OP_ADD, 10, 20, 30, 8);
-    if (i.op != op.OP_ADD) { ret 0; }
-    if (dst_reg(?i) != 10) { ret 0; }
-    if (src1_reg(?i) != 20) { ret 0; }
-    if (src2_reg(?i) != 30) { ret 0; }
-    if (size(?i) != 8) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_ADD) { ret 1; }
+    if (dst_reg(?i) != 10) { ret 1; }
+    if (src1_reg(?i) != 20) { ret 1; }
+    if (src2_reg(?i) != 30) { ret 1; }
+    if (size(?i) != 8) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_cmp carries condition code" {
     val i: Instruction = make_cmp(1, 2, 3, op.CC_EQ, 4);
-    if (i.op != op.OP_CMP) { ret 0; }
-    if (cc(?i) != op.CC_EQ) { ret 0; }
-    if (size(?i) != 4) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_CMP) { ret 1; }
+    if (cc(?i) != op.CC_EQ) { ret 1; }
+    if (size(?i) != 4) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_jmp and make_label use f2 as label index" {
     val j: Instruction = make_jmp(7);
     val l: Instruction = make_label(7);
-    if (j.op != op.OP_JUMP) { ret 0; }
-    if (label_idx(?j) != 7) { ret 0; }
-    if (l.op != op.OP_LABEL) { ret 0; }
-    if (label_idx(?l) != 7) { ret 0; }
-    ret 1;
+    if (j.op != op.OP_JUMP) { ret 1; }
+    if (label_idx(?j) != 7) { ret 1; }
+    if (l.op != op.OP_LABEL) { ret 1; }
+    if (label_idx(?l) != 7) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_ret produces zero fields" {
     val i: Instruction = make_ret();
-    if (i.op != op.OP_RET) { ret 0; }
-    if (i.f0 != 0) { ret 0; }
-    if (i.f1 != 0) { ret 0; }
-    if (i.f2 != 0) { ret 0; }
-    if (size(?i) != 1) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_RET) { ret 1; }
+    if (i.f0 != 0) { ret 1; }
+    if (i.f1 != 0) { ret 1; }
+    if (i.f2 != 0) { ret 1; }
+    if (size(?i) != 1) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_ret_value carries register and type descriptor" {
     val i: Instruction = make_ret_value(10, 3, 8);
-    if (i.op != op.OP_RET) { ret 0; }
-    if (dst_reg(?i) != 10) { ret 0; }
-    if (i.f2 != 3) { ret 0; }
-    if (size(?i) != 8) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_RET) { ret 1; }
+    if (dst_reg(?i) != 10) { ret 1; }
+    if (i.f2 != 3) { ret 1; }
+    if (size(?i) != 8) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_call_direct with tail flag" {
     val i: Instruction = make_call_direct(5, 3, true, 8);
-    if (i.op != op.OP_CALL) { ret 0; }
-    if (dst_reg(?i) != 5) { ret 0; }
-    if (cc(?i) != op.CALL_TAIL) { ret 0; }
-    if (flag(?i) != 0) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_CALL) { ret 1; }
+    if (dst_reg(?i) != 5) { ret 1; }
+    if (cc(?i) != op.CALL_TAIL) { ret 1; }
+    if (flag(?i) != 0) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_call_indirect sets flag bit" {
     val i: Instruction = make_call_indirect(5, 10, false, 8);
-    if (i.op != op.OP_CALL) { ret 0; }
-    if (flag(?i) != 1) { ret 0; }
-    if (src1_reg(?i) != 10) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_CALL) { ret 1; }
+    if (flag(?i) != 1) { ret 1; }
+    if (src1_reg(?i) != 10) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_div modes" {
     val q: Instruction = make_div(1, 2, 3, op.DIV_QUOT, 8);
     val r: Instruction = make_div(1, 2, 3, op.DIV_REM, 8);
     val u: Instruction = make_div(1, 2, 3, op.DIV_UQUOT, 8);
-    if (q.op != op.OP_DIV) { ret 0; }
-    if (cc(?q) != op.DIV_QUOT) { ret 0; }
-    if (cc(?r) != op.DIV_REM) { ret 0; }
-    if (cc(?u) != op.DIV_UQUOT) { ret 0; }
-    ret 1;
+    if (q.op != op.OP_DIV) { ret 1; }
+    if (cc(?q) != op.DIV_QUOT) { ret 1; }
+    if (cc(?r) != op.DIV_REM) { ret 1; }
+    if (cc(?u) != op.DIV_UQUOT) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_conv kinds" {
     val z: Instruction = make_conv(1, 2, op.CONV_ZEXT, 8);
     val s: Instruction = make_conv(1, 2, op.CONV_SEXT, 8);
-    if (z.op != op.OP_CONV) { ret 0; }
-    if (cc(?z) != op.CONV_ZEXT) { ret 0; }
-    if (cc(?s) != op.CONV_SEXT) { ret 0; }
-    ret 1;
+    if (z.op != op.OP_CONV) { ret 1; }
+    if (cc(?z) != op.CONV_ZEXT) { ret 1; }
+    if (cc(?s) != op.CONV_SEXT) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_trap and make_hint" {
     val t: Instruction = make_trap();
     val h: Instruction = make_hint(op.HINT_PAUSE);
-    if (t.op != op.OP_TRAP) { ret 0; }
-    if (h.op != op.OP_HINT) { ret 0; }
-    if (cc(?h) != op.HINT_PAUSE) { ret 0; }
-    ret 1;
+    if (t.op != op.OP_TRAP) { ret 1; }
+    if (h.op != op.OP_HINT) { ret 1; }
+    if (cc(?h) != op.HINT_PAUSE) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_cmp_float sets flag" {
     val i: Instruction = make_cmp_float(1, 2, 3, op.CC_LT, 8);
-    if (i.op != op.OP_CMP) { ret 0; }
-    if (flag(?i) != 1) { ret 0; }
-    if (cc(?i) != op.CC_LT) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_CMP) { ret 1; }
+    if (flag(?i) != 1) { ret 1; }
+    if (cc(?i) != op.CC_LT) { ret 1; }
+    ret 0;
 }
 
 test "inst: make_scarg uses OP_ARG with flag=1" {
     val i: Instruction = make_scarg(2, 10, 8);
-    if (i.op != op.OP_ARG) { ret 0; }
-    if (flag(?i) != 1) { ret 0; }
-    if (dst_reg(?i) != 2) { ret 0; }
-    ret 1;
+    if (i.op != op.OP_ARG) { ret 1; }
+    if (flag(?i) != 1) { ret 1; }
+    if (dst_reg(?i) != 2) { ret 1; }
+    ret 0;
 }

@@ -5,13 +5,19 @@
 # symbol table, debug file table, functions (with pools, blocks, type
 # descriptors, debug locs), and data declarations.
 
-use std.types.bool;
-use std.types.size;
-use std.types.result;
-use std.types.string;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.size.usize;
+use std.types.result.err;
+use std.types.result.is_err;
+use std.types.result.ok;
+use std.types.result.Result;
+use std.types.result.unwrap_err;
+use std.types.result.unwrap_ok;
+use std.types.string.str;
 
 use allocator: std.allocator;
-use bytebuf:   std.io.bytebuf;
+use bytebuf:   std.io.buffer;
 use vec:       std.collections.vector;
 use mem:       std.memory;
 
@@ -35,7 +41,7 @@ pub fun decode(alloc: *allocator.Allocator, raw: *u8, len: usize) Result[mod.Mod
         ret err[mod.Module, str]("nil argument");
     }
 
-    var buf: bytebuf.ReadBuf = bytebuf.rbuf_init(raw, len);
+    var buf: bytebuf.ReadBuf = bytebuf.rbuf_make(raw, len);
 
     val mr: Result[bool, str] = read_magic(?buf);
     if (is_err[bool, str](mr)) {

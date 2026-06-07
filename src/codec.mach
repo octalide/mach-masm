@@ -4,13 +4,21 @@
 # human-readable .masm text format. single public module — consumers
 # import masm.codec and use the top-level functions.
 
-use std.types.bool;
-use std.types.size;
-use std.types.result;
-use std.types.string;
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.size.usize;
+use std.types.result.err;
+use std.types.result.is_err;
+use std.types.result.ok;
+use std.types.result.Result;
+use std.types.result.unwrap_err;
+use std.types.result.unwrap_ok;
+use std.types.string.str;
+use std.types.string.str_equals;
 
 use allocator: std.allocator;
-use bytebuf:   std.io.bytebuf;
+use page:      std.allocator.page;
+use bytebuf:   std.io.buffer;
 use fs:        std.filesystem;
 
 use op:      masm.op;
@@ -53,8 +61,8 @@ pub fun encode_file(alloc: *allocator.Allocator, m: *mod.Module, path: str) Resu
     }
 
     var f: fs.File = unwrap_ok[fs.File, str](fr);
-    val wr: Result[usize, str] = fs.file_write(?f, buf.data, buf.len);
-    fs.file_close(?f);
+    val wr: Result[usize, str] = fs.write(?f, buf.data, buf.len);
+    fs.close(?f);
     bytebuf.wbuf_dnit(?buf);
 
     if (is_err[usize, str](wr)) {
@@ -86,24 +94,24 @@ pub fun decode_file(alloc: *allocator.Allocator, path: str) Result[mod.Module, s
     }
     var f: fs.File = unwrap_ok[fs.File, str](fr);
 
-    val sr: Result[fs.Stat, str] = fs.file_stat(?f);
-    if (is_err[fs.Stat, str](sr)) {
-        fs.file_close(?f);
-        ret err[mod.Module, str](unwrap_err[fs.Stat, str](sr));
+    val sr: Result[fs.FileInfo, str] = fs.info(?f);
+    if (is_err[fs.FileInfo, str](sr)) {
+        fs.close(?f);
+        ret err[mod.Module, str](unwrap_err[fs.FileInfo, str](sr));
     }
-    val st: fs.Stat = unwrap_ok[fs.Stat, str](sr);
-    val size: usize = st.st_size::usize;
+    val st: fs.FileInfo = unwrap_ok[fs.FileInfo, str](sr);
+    val size: usize = st.size;
 
     val ar: Result[*u8, str] =
         allocator.allocate[u8](alloc, size);
     if (is_err[*u8, str](ar)) {
-        fs.file_close(?f);
+        fs.close(?f);
         ret err[mod.Module, str]("alloc failed");
     }
     val buf: *u8 = unwrap_ok[*u8, str](ar);
 
-    val rr: Result[usize, str] = fs.file_read(?f, buf, size);
-    fs.file_close(?f);
+    val rr: Result[usize, str] = fs.read(?f, buf, size);
+    fs.close(?f);
     if (is_err[usize, str](rr)) {
         allocator.deallocate[u8](alloc, buf, size);
         ret err[mod.Module, str](unwrap_err[usize, str](rr));
@@ -135,8 +143,8 @@ pub fun print_file(alloc: *allocator.Allocator, m: *mod.Module, path: str) Resul
     }
 
     var f: fs.File = unwrap_ok[fs.File, str](fr);
-    val wr: Result[usize, str] = fs.file_write(?f, buf.data, buf.len);
-    fs.file_close(?f);
+    val wr: Result[usize, str] = fs.write(?f, buf.data, buf.len);
+    fs.close(?f);
     bytebuf.wbuf_dnit(?buf);
 
     if (is_err[usize, str](wr)) {
@@ -168,24 +176,24 @@ pub fun parse_file(alloc: *allocator.Allocator, path: str) Result[mod.Module, st
     }
     var f: fs.File = unwrap_ok[fs.File, str](fr);
 
-    val sr: Result[fs.Stat, str] = fs.file_stat(?f);
-    if (is_err[fs.Stat, str](sr)) {
-        fs.file_close(?f);
-        ret err[mod.Module, str](unwrap_err[fs.Stat, str](sr));
+    val sr: Result[fs.FileInfo, str] = fs.info(?f);
+    if (is_err[fs.FileInfo, str](sr)) {
+        fs.close(?f);
+        ret err[mod.Module, str](unwrap_err[fs.FileInfo, str](sr));
     }
-    val st: fs.Stat = unwrap_ok[fs.Stat, str](sr);
-    val size: usize = st.st_size::usize;
+    val st: fs.FileInfo = unwrap_ok[fs.FileInfo, str](sr);
+    val size: usize = st.size;
 
     val ar: Result[*u8, str] =
         allocator.allocate[u8](alloc, size);
     if (is_err[*u8, str](ar)) {
-        fs.file_close(?f);
+        fs.close(?f);
         ret err[mod.Module, str]("alloc failed");
     }
     val buf: *u8 = unwrap_ok[*u8, str](ar);
 
-    val rr: Result[usize, str] = fs.file_read(?f, buf, size);
-    fs.file_close(?f);
+    val rr: Result[usize, str] = fs.read(?f, buf, size);
+    fs.close(?f);
     if (is_err[usize, str](rr)) {
         allocator.deallocate[u8](alloc, buf, size);
         ret err[mod.Module, str](unwrap_err[usize, str](rr));
@@ -226,131 +234,139 @@ fun build_test_module(alloc: *allocator.Allocator) mod.Module {
 }
 
 test "codec: binary round-trip preserves function count" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val er: Result[bytebuf.WriteBuf, str] = encode(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](er)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](er)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](er);
     val dr: Result[mod.Module, str] = decode(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len == 1) { ret 1; }
-    ret 0;
+    if (m2.functions.len == 1) { ret 0; }
+    ret 1;
 }
 
 test "codec: binary round-trip preserves function name" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val er: Result[bytebuf.WriteBuf, str] = encode(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](er)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](er)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](er);
     val dr: Result[mod.Module, str] = decode(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len < 1) { ret 0; }
-    if (str_equals(m2.functions.data[0].name, "test_fn")) { ret 1; }
-    ret 0;
+    if (m2.functions.len < 1) { ret 1; }
+    if (str_equals(m2.functions.data[0].name, "test_fn")) { ret 0; }
+    ret 1;
 }
 
 test "codec: binary round-trip preserves instruction count" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val er: Result[bytebuf.WriteBuf, str] = encode(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](er)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](er)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](er);
     val dr: Result[mod.Module, str] = decode(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len < 1) { ret 0; }
+    if (m2.functions.len < 1) { ret 1; }
     val f: *fn.Function = m2.functions.data[0];
-    if (f.blocks.len < 1) { ret 0; }
-    if (f.blocks.data[0].inst_count == 5) { ret 1; }
-    ret 0;
+    if (f.blocks.len < 1) { ret 1; }
+    if (f.blocks.data[0].inst_count == 5) { ret 0; }
+    ret 1;
 }
 
 test "codec: binary round-trip preserves opcode sequence" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val er: Result[bytebuf.WriteBuf, str] = encode(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](er)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](er)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](er);
     val dr: Result[mod.Module, str] = decode(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len < 1) { ret 0; }
+    if (m2.functions.len < 1) { ret 1; }
     val f: *fn.Function = m2.functions.data[0];
-    if (f.blocks.len < 1) { ret 0; }
+    if (f.blocks.len < 1) { ret 1; }
     val b: *fn.Block = f.blocks.data[0];
-    if (b.inst_count != 5) { ret 0; }
-    if (b.insts[0].op != op.OP_LABEL) { ret 0; }
-    if (b.insts[1].op != op.OP_MOVE) { ret 0; }
-    if (b.insts[2].op != op.OP_LOAD) { ret 0; }
-    if (b.insts[3].op != op.OP_ADD) { ret 0; }
-    if (b.insts[4].op != op.OP_RET) { ret 0; }
-    ret 1;
+    if (b.inst_count != 5) { ret 1; }
+    if (b.insts[0].op != op.OP_LABEL) { ret 1; }
+    if (b.insts[1].op != op.OP_MOVE) { ret 1; }
+    if (b.insts[2].op != op.OP_LOAD) { ret 1; }
+    if (b.insts[3].op != op.OP_ADD) { ret 1; }
+    if (b.insts[4].op != op.OP_RET) { ret 1; }
+    ret 0;
 }
 
 test "codec: binary round-trip preserves const pool values" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val er: Result[bytebuf.WriteBuf, str] = encode(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](er)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](er)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](er);
     val dr: Result[mod.Module, str] = decode(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len < 1) { ret 0; }
+    if (m2.functions.len < 1) { ret 1; }
     val v: u64 = pool.const_get(?m2.functions.data[0].const_pool, 0);
-    if (v == 42) { ret 1; }
-    ret 0;
+    if (v == 42) { ret 0; }
+    ret 1;
 }
 
 test "codec: text round-trip preserves function count" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val pr: Result[bytebuf.WriteBuf, str] = printer.print(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](pr)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](pr)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](pr);
     val dr: Result[mod.Module, str] = parse(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len == 1) { ret 1; }
-    ret 0;
+    if (m2.functions.len == 1) { ret 0; }
+    ret 1;
 }
 
 test "codec: text round-trip preserves instruction count" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val pr: Result[bytebuf.WriteBuf, str] = printer.print(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](pr)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](pr)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](pr);
     val dr: Result[mod.Module, str] = parse(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len < 1) { ret 0; }
+    if (m2.functions.len < 1) { ret 1; }
     val f: *fn.Function = m2.functions.data[0];
-    if (f.blocks.len < 1) { ret 0; }
-    if (f.blocks.data[0].inst_count == 4) { ret 1; }
-    ret 0;
+    if (f.blocks.len < 1) { ret 1; }
+    if (f.blocks.data[0].inst_count == 4) { ret 0; }
+    ret 1;
 }
 
 test "codec: text round-trip preserves opcodes" {
-    var a: allocator.Allocator = allocator.default();
+    var a: allocator.Allocator;
+    page.make(?a);
     var m: mod.Module = build_test_module(?a);
     val pr: Result[bytebuf.WriteBuf, str] = printer.print(?a, ?m);
-    if (is_err[bytebuf.WriteBuf, str](pr)) { ret 0; }
+    if (is_err[bytebuf.WriteBuf, str](pr)) { ret 1; }
     var buf: bytebuf.WriteBuf = unwrap_ok[bytebuf.WriteBuf, str](pr);
     val dr: Result[mod.Module, str] = parse(?a, buf.data, buf.len);
-    if (is_err[mod.Module, str](dr)) { ret 0; }
+    if (is_err[mod.Module, str](dr)) { ret 1; }
     var m2: mod.Module = unwrap_ok[mod.Module, str](dr);
-    if (m2.functions.len < 1) { ret 0; }
+    if (m2.functions.len < 1) { ret 1; }
     val f: *fn.Function = m2.functions.data[0];
-    if (f.blocks.len < 1) { ret 0; }
+    if (f.blocks.len < 1) { ret 1; }
     val b: *fn.Block = f.blocks.data[0];
-    if (b.inst_count != 4) { ret 0; }
-    if (b.insts[0].op != op.OP_MOVE) { ret 0; }
-    if (b.insts[1].op != op.OP_LOAD) { ret 0; }
-    if (b.insts[2].op != op.OP_ADD) { ret 0; }
-    if (b.insts[3].op != op.OP_RET) { ret 0; }
-    ret 1;
+    if (b.inst_count != 4) { ret 1; }
+    if (b.insts[0].op != op.OP_MOVE) { ret 1; }
+    if (b.insts[1].op != op.OP_LOAD) { ret 1; }
+    if (b.insts[2].op != op.OP_ADD) { ret 1; }
+    if (b.insts[3].op != op.OP_RET) { ret 1; }
+    ret 0;
 }

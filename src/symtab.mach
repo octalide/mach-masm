@@ -4,10 +4,12 @@
 # declarations. used by the binary encoder to write symbol entries
 # and by the decoder to reconstruct module-level symbol information.
 
-use std.types.bool;
-use std.types.size;
-use std.types.result;
-use std.types.string;
+use std.types.size.usize;
+use std.types.result.is_err;
+use std.types.result.is_ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
+use std.types.string.str;
 
 use allocator: std.allocator;
 use vec:       std.collections.vector;
