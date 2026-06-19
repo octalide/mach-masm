@@ -1,0 +1,1258 @@
+# masm.cfg: control flow graph construction
+#
+# builds a CFG over an existing masm.Function's block array. blocks
+# already exist with labels and instructions — the CFG adds
+# predecessor/successor edges as a parallel data structure.
+
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.bool.false;
+use std.types.size.usize;
+use std.types.string.str;
+use std.types.result.is_err;
+use std.types.result.is_ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
+
+use allocator: std.allocator;
+use page:      std.allocator.page;
+use map:       std.collections.map;
+
+use fn:   masm.function;
+use inst:  masm.inst;
+use op:    masm.op;
+use pool:  masm.pool;
+
+# BasicBlock: wraps a masm.Block with CFG edges
+# ---
+# block:  pointer to the masm.Block in Function.blocks
+# id:     block index in Function.blocks
+# preds:  predecessor block IDs (slice into shared edge array)
+# npreds: number of predecessors
+# succs:  successor block IDs (slice into shared edge array)
+# nsuccs: number of successors
+pub rec BasicBlock {
+    block:  *fn.Block;
+    id:     u16;
+    preds:  *u16;
+    npreds: u16;
+    succs:  *u16;
+    nsuccs: u16;
+}
+
+# CFG: control flow graph over a function's blocks
+# ---
+# blocks:      parallel array of BasicBlocks (indexed same as Function.blocks)
+# block_count: number of blocks
+# entry:       entry block ID (always 0)
+pub rec CFG {
+    blocks:      *BasicBlock;
+    block_count: u16;
+    entry:       u16;
+}
+
+# resolve_label: find block index for a label table index
+fun resolve_label(func: *fn.Function, lbl_idx: i32,
+                  label_map: *map.Map[str, i32]) i32 {
+    val name: str = pool.label_get(?func.labels, lbl_idx);
+    if (name == nil) { ret -1; }
+    val r: Result[*i32, str] = map.get[str, i32](label_map, ?name);
+    if (is_err[*i32, str](r)) { ret -1; }
+    ret @unwrap_ok[*i32, str](r);
+}
+
+# block_successors: compute successors for a block
+#
+# writes successor block IDs to out[0..n] and returns the count.
+# ---
+# func:        pointer to function (for label resolution)
+# blk:         pointer to block
+# block_idx:   index of this block
+# block_count: total number of blocks
+# label_map:   label name -> block index map
+# out:         output buffer (at least 2 entries)
+# ret:         number of successors written
+fun block_successors(func: *fn.Function, blk: *fn.Block, block_idx: u16,
+                     block_count: u16, label_map: *map.Map[str, i32],
+                     out: *u16) u16 {
+    if (blk == nil || blk.inst_count == 0) {
+        if (block_idx + 1 < block_count) {
+            out[0] = block_idx + 1;
+            ret 1;
+        }
+        ret 0;
+    }
+
+    val last: *inst.Instruction = ?blk.insts[blk.inst_count - 1];
+
+    if (last.op == op.OP_JUMP) {
+        val target: i32 = resolve_label(func, inst.label_idx(last), label_map);
+        if (target >= 0) {
+            out[0] = target::u16;
+            ret 1;
+        }
+        ret 0;
+    }
+
+    if (last.op == op.OP_BRANCH) {
+        var ns: u16 = 0;
+        val target: i32 = resolve_label(func, inst.label_idx(last), label_map);
+        if (target >= 0) {
+            out[0] = target::u16;
+            ns = 1;
+        }
+        if (block_idx + 1 < block_count) {
+            out[ns] = block_idx + 1;
+            ns = ns + 1;
+        }
+        ret ns;
+    }
+
+    if (last.op == op.OP_RET || last.op == op.OP_TRAP) {
+        ret 0;
+    }
+
+    if (last.op == op.OP_CALL && inst.cc(last) == op.CALL_TAIL) {
+        ret 0;
+    }
+
+    if (block_idx + 1 < block_count) {
+        out[0] = block_idx + 1;
+        ret 1;
+    }
+    ret 0;
+}
+
+# build_cfg: construct a CFG over a function's blocks
+# ---
+# alloc: allocator for CFG memory
+# func:  pointer to function
+# ret:   constructed CFG
+pub fun build_cfg(alloc: *allocator.Allocator, func: *fn.Function) CFG {
+    var cfg: CFG;
+    cfg.blocks = nil;
+    cfg.block_count = 0;
+    cfg.entry = 0;
+
+    if (func == nil || func.blocks.len == 0) { ret cfg; }
+
+    val n: u16 = func.blocks.len::u16;
+    cfg.block_count = n;
+
+    val br: Result[*BasicBlock, str] =
+        allocator.reallocate[BasicBlock](alloc, nil, 0, n::usize);
+    if (is_err[*BasicBlock, str](br)) { ret cfg; }
+    cfg.blocks = unwrap_ok[*BasicBlock, str](br);
+
+    var label_map: map.Map[str, i32] = map.init[str, i32](alloc, map.hash_str, map.eq_str);
+    var i: u16 = 0;
+    for (i < n) {
+        val blk: *fn.Block = func.blocks.data[i::usize];
+        if (blk != nil && blk.label != nil) {
+            map.insert[str, i32](?label_map, blk.label, i::i32);
+        }
+        i = i + 1;
+    }
+
+    val tmp_r: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, (n::usize) * 2);
+    if (is_err[*u16, str](tmp_r)) {
+        map.dnit[str, i32](?label_map);
+        ret cfg;
+    }
+    var tmp_succ: *u16 = unwrap_ok[*u16, str](tmp_r);
+
+    var total_edges: usize = 0;
+    i = 0;
+    for (i < n) {
+        val blk: *fn.Block = func.blocks.data[i::usize];
+        cfg.blocks[i].block = blk;
+        cfg.blocks[i].id = i;
+        cfg.blocks[i].preds = nil;
+        cfg.blocks[i].npreds = 0;
+        cfg.blocks[i].succs = nil;
+        cfg.blocks[i].nsuccs = 0;
+
+        val base: usize = (i::usize) * 2;
+        val ns: u16 = block_successors(func, blk, i, n, ?label_map, ?tmp_succ[base]);
+        cfg.blocks[i].nsuccs = ns;
+        total_edges = total_edges + ns::usize;
+        i = i + 1;
+    }
+
+    if (total_edges > 0) {
+        val sr: Result[*u16, str] =
+            allocator.reallocate[u16](alloc, nil, 0, total_edges);
+        if (is_ok[*u16, str](sr)) {
+            var succ_edges: *u16 = unwrap_ok[*u16, str](sr);
+            var offset: usize = 0;
+            i = 0;
+            for (i < n) {
+                val ns: u16 = cfg.blocks[i].nsuccs;
+                if (ns > 0) {
+                    cfg.blocks[i].succs = ?succ_edges[offset];
+                    val base: usize = (i::usize) * 2;
+                    var j: u16 = 0;
+                    for (j < ns) {
+                        succ_edges[offset + j::usize] = tmp_succ[base + j::usize];
+                        j = j + 1;
+                    }
+                    offset = offset + ns::usize;
+                }
+                i = i + 1;
+            }
+        }
+
+        i = 0;
+        for (i < n) {
+            var j: u16 = 0;
+            for (j < cfg.blocks[i].nsuccs) {
+                val s: u16 = cfg.blocks[i].succs[j];
+                if (s < n) {
+                    cfg.blocks[s].npreds = cfg.blocks[s].npreds + 1;
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+
+        val pr: Result[*u16, str] =
+            allocator.reallocate[u16](alloc, nil, 0, total_edges);
+        if (is_ok[*u16, str](pr)) {
+            var pred_edges: *u16 = unwrap_ok[*u16, str](pr);
+            var offset: usize = 0;
+            i = 0;
+            for (i < n) {
+                if (cfg.blocks[i].npreds > 0) {
+                    cfg.blocks[i].preds = ?pred_edges[offset];
+                    offset = offset + cfg.blocks[i].npreds::usize;
+                }
+                i = i + 1;
+            }
+
+            i = 0;
+            for (i < n) {
+                cfg.blocks[i].npreds = 0;
+                i = i + 1;
+            }
+
+            i = 0;
+            for (i < n) {
+                var j: u16 = 0;
+                for (j < cfg.blocks[i].nsuccs) {
+                    val s: u16 = cfg.blocks[i].succs[j];
+                    if (s < n) {
+                        val wi: u16 = cfg.blocks[s].npreds;
+                        cfg.blocks[s].preds[wi] = i;
+                        cfg.blocks[s].npreds = wi + 1;
+                    }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+        }
+    }
+
+    allocator.deallocate[u16](alloc, tmp_succ, (n::usize) * 2);
+    map.dnit[str, i32](?label_map);
+
+    ret cfg;
+}
+
+# cfg_dnit: free all memory owned by a CFG
+# ---
+# alloc: allocator used during build_cfg
+# cfg:   pointer to CFG
+pub fun cfg_dnit(alloc: *allocator.Allocator, cfg: *CFG) {
+    if (alloc == nil || cfg == nil || cfg.blocks == nil) { ret; }
+
+    var succ_base: *u16 = nil;
+    var pred_base: *u16 = nil;
+    var total_succ: usize = 0;
+    var total_pred: usize = 0;
+
+    var i: u16 = 0;
+    for (i < cfg.block_count) {
+        if (cfg.blocks[i].succs != nil && succ_base == nil) {
+            succ_base = cfg.blocks[i].succs;
+        }
+        if (cfg.blocks[i].preds != nil && pred_base == nil) {
+            pred_base = cfg.blocks[i].preds;
+        }
+        total_succ = total_succ + cfg.blocks[i].nsuccs::usize;
+        total_pred = total_pred + cfg.blocks[i].npreds::usize;
+        i = i + 1;
+    }
+
+    if (succ_base != nil) {
+        allocator.deallocate[u16](alloc, succ_base, total_succ);
+    }
+    if (pred_base != nil) {
+        allocator.deallocate[u16](alloc, pred_base, total_pred);
+    }
+
+    allocator.deallocate[BasicBlock](alloc, cfg.blocks, cfg.block_count::usize);
+    cfg.blocks = nil;
+    cfg.block_count = 0;
+}
+
+val DOM_UNDEF: u16 = 65535;
+
+# dominance information for a CFG
+# ---
+# idom:        immediate dominator: idom[block_id] = dominator block_id
+# rpo:         reverse postorder traversal: rpo[0] = entry
+# rpo_count:   number of blocks in RPO (excludes unreachable)
+# rpo_number:  rpo_number[block_id] = position in rpo[]
+# block_count: total blocks (allocation size for idom/rpo_number)
+pub rec DomInfo {
+    idom:        *u16;
+    rpo:         *u16;
+    rpo_count:   u16;
+    rpo_number:  *u16;
+    block_count: u16;
+}
+
+# iterative DFS to produce reverse postorder
+fun compute_rpo(alloc: *allocator.Allocator, cfg: *CFG,
+                rpo: *u16, rpo_number: *u16) u16 {
+    val n: u16 = cfg.block_count;
+
+    val vr: Result[*u8, str] =
+        allocator.reallocate[u8](alloc, nil, 0, n::usize);
+    if (is_err[*u8, str](vr)) { ret 0; }
+    var visited: *u8 = unwrap_ok[*u8, str](vr);
+
+    val sr: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](sr)) {
+        allocator.deallocate[u8](alloc, visited, n::usize);
+        ret 0;
+    }
+    var stack: *u16 = unwrap_ok[*u16, str](sr);
+
+    val ir: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](ir)) {
+        allocator.deallocate[u8](alloc, visited, n::usize);
+        allocator.deallocate[u16](alloc, stack, n::usize);
+        ret 0;
+    }
+    var succ_idx: *u16 = unwrap_ok[*u16, str](ir);
+
+    var i: u16 = 0;
+    for (i < n) {
+        visited[i] = 0;
+        rpo_number[i] = DOM_UNDEF;
+        i = i + 1;
+    }
+
+    stack[0] = cfg.entry;
+    succ_idx[0] = 0;
+    visited[cfg.entry] = 1;
+    var sp: u16 = 1;
+    var po_count: u16 = 0;
+
+    for (sp > 0) {
+        val top: u16 = sp - 1;
+        val bid: u16 = stack[top];
+        val si: u16 = succ_idx[top];
+        val bb: *BasicBlock = ?cfg.blocks[bid];
+
+        if (si < bb.nsuccs) {
+            succ_idx[top] = si + 1;
+            val s: u16 = bb.succs[si];
+            if (visited[s] == 0) {
+                visited[s] = 1;
+                stack[sp] = s;
+                succ_idx[sp] = 0;
+                sp = sp + 1;
+            }
+        } or {
+            rpo[po_count] = bid;
+            po_count = po_count + 1;
+            sp = sp - 1;
+        }
+    }
+
+    if (po_count > 1) {
+        var lo: u16 = 0;
+        var hi: u16 = po_count - 1;
+        for (lo < hi) {
+            val tmp: u16 = rpo[lo];
+            rpo[lo] = rpo[hi];
+            rpo[hi] = tmp;
+            lo = lo + 1;
+            hi = hi - 1;
+        }
+    }
+
+    i = 0;
+    for (i < po_count) {
+        rpo_number[rpo[i]] = i;
+        i = i + 1;
+    }
+
+    allocator.deallocate[u8](alloc, visited, n::usize);
+    allocator.deallocate[u16](alloc, stack, n::usize);
+    allocator.deallocate[u16](alloc, succ_idx, n::usize);
+
+    ret po_count;
+}
+
+# Cooper-Harvey-Kennedy intersect helper
+fun intersect(idom: *u16, rpo_number: *u16, a: u16, b: u16) u16 {
+    var fa: u16 = a;
+    var fb: u16 = b;
+    for (fa != fb) {
+        for (rpo_number[fa] > rpo_number[fb]) {
+            fa = idom[fa];
+        }
+        for (rpo_number[fb] > rpo_number[fa]) {
+            fb = idom[fb];
+        }
+    }
+    ret fa;
+}
+
+# compute_dominance: build immediate dominator tree using CHK algorithm
+# ---
+# alloc: allocator for DomInfo arrays
+# cfg:   pointer to CFG (must outlive DomInfo)
+# ret:   dominance information
+pub fun compute_dominance(alloc: *allocator.Allocator, cfg: *CFG) DomInfo {
+    var dom: DomInfo;
+    dom.idom = nil;
+    dom.rpo = nil;
+    dom.rpo_count = 0;
+    dom.rpo_number = nil;
+    dom.block_count = 0;
+
+    if (alloc == nil || cfg == nil || cfg.block_count == 0) { ret dom; }
+
+    val n: u16 = cfg.block_count;
+    dom.block_count = n;
+
+    val ir: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](ir)) { ret dom; }
+    dom.idom = unwrap_ok[*u16, str](ir);
+
+    val rr: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](rr)) { ret dom; }
+    dom.rpo = unwrap_ok[*u16, str](rr);
+
+    val nr: Result[*u16, str] =
+        allocator.reallocate[u16](alloc, nil, 0, n::usize);
+    if (is_err[*u16, str](nr)) { ret dom; }
+    dom.rpo_number = unwrap_ok[*u16, str](nr);
+
+    dom.rpo_count = compute_rpo(alloc, cfg, dom.rpo, dom.rpo_number);
+    if (dom.rpo_count == 0) { ret dom; }
+
+    var i: u16 = 0;
+    for (i < n) {
+        dom.idom[i] = DOM_UNDEF;
+        i = i + 1;
+    }
+    dom.idom[cfg.entry] = cfg.entry;
+
+    var changed: bool = true;
+    for (changed) {
+        changed = false;
+        var ri: u16 = 1;
+        for (ri < dom.rpo_count) {
+            val b: u16 = dom.rpo[ri];
+            val bb: *BasicBlock = ?cfg.blocks[b];
+
+            var new_idom: u16 = DOM_UNDEF;
+            var pi: u16 = 0;
+            for (pi < bb.npreds) {
+                val p: u16 = bb.preds[pi];
+                if (dom.idom[p] != DOM_UNDEF) {
+                    new_idom = p;
+                    pi = pi + 1;
+                    brk;
+                }
+                pi = pi + 1;
+            }
+
+            for (pi < bb.npreds) {
+                val p: u16 = bb.preds[pi];
+                if (dom.idom[p] != DOM_UNDEF) {
+                    new_idom = intersect(dom.idom, dom.rpo_number, new_idom, p);
+                }
+                pi = pi + 1;
+            }
+
+            if (new_idom != DOM_UNDEF && dom.idom[b] != new_idom) {
+                dom.idom[b] = new_idom;
+                changed = true;
+            }
+            ri = ri + 1;
+        }
+    }
+
+    ret dom;
+}
+
+# dominates: check whether block a dominates block b
+# ---
+# dom: pointer to DomInfo
+# a:   potential dominator block ID
+# b:   potential dominated block ID
+# ret: true if a dominates b
+pub fun dominates(dom: *DomInfo, a: u16, b: u16) bool {
+    if (dom == nil || dom.idom == nil) { ret false; }
+    if (a == b) { ret true; }
+    if (a >= dom.block_count || b >= dom.block_count) { ret false; }
+    if (dom.idom[b] == DOM_UNDEF) { ret false; }
+    var cur: u16 = b;
+    for (cur != dom.idom[cur]) {
+        cur = dom.idom[cur];
+        if (cur == a) { ret true; }
+        if (dom.idom[cur] == DOM_UNDEF) { ret false; }
+    }
+    ret cur == a;
+}
+
+# dom_dnit: free all memory owned by a DomInfo
+# ---
+# alloc: allocator used during compute_dominance
+# dom:   pointer to DomInfo
+pub fun dom_dnit(alloc: *allocator.Allocator, dom: *DomInfo) {
+    if (alloc == nil || dom == nil) { ret; }
+    val n: usize = dom.block_count::usize;
+    if (dom.idom != nil) {
+        allocator.deallocate[u16](alloc, dom.idom, n);
+        dom.idom = nil;
+    }
+    if (dom.rpo != nil) {
+        allocator.deallocate[u16](alloc, dom.rpo, n);
+        dom.rpo = nil;
+    }
+    if (dom.rpo_number != nil) {
+        allocator.deallocate[u16](alloc, dom.rpo_number, n);
+        dom.rpo_number = nil;
+    }
+    dom.rpo_count = 0;
+    dom.block_count = 0;
+}
+
+# bitset for register liveness
+# ---
+# bits:       packed u64 words, one bit per register ID
+# word_count: number of u64 words (ceil(max_reg / 64))
+pub rec RegSet {
+    bits:       *u64;
+    word_count: u16;
+}
+
+# per-block live-in and live-out register sets
+# ---
+# live_in:  registers live at block entry
+# live_out: registers live at block exit
+# count:    number of blocks (== cfg.block_count)
+pub rec LiveSets {
+    live_in:  *RegSet;
+    live_out: *RegSet;
+    count:    u16;
+}
+
+fun regset_alloc(alloc: *allocator.Allocator, wc: u16) RegSet {
+    var s: RegSet;
+    s.bits = nil;
+    s.word_count = wc;
+    if (wc == 0) { ret s; }
+    val r: Result[*u64, str] =
+        allocator.reallocate[u64](alloc, nil, 0, wc::usize);
+    if (is_err[*u64, str](r)) { ret s; }
+    s.bits = unwrap_ok[*u64, str](r);
+    var i: u16 = 0;
+    for (i < wc) { s.bits[i] = 0; i = i + 1; }
+    ret s;
+}
+
+fun regset_free(alloc: *allocator.Allocator, s: *RegSet) {
+    if (s.bits != nil) {
+        allocator.deallocate[u64](alloc, s.bits, s.word_count::usize);
+        s.bits = nil;
+    }
+}
+
+fun regset_set(s: *RegSet, reg: u16) {
+    val w: u16 = reg / 64;
+    val b: u16 = reg & 63;
+    if (w < s.word_count) {
+        s.bits[w] = s.bits[w] | (1::u64 << (b::u64));
+    }
+}
+
+fun regset_test(s: *RegSet, reg: u16) bool {
+    val w: u16 = reg / 64;
+    val b: u16 = reg & 63;
+    if (w >= s.word_count) { ret false; }
+    ret (s.bits[w] & (1::u64 << (b::u64))) != 0;
+}
+
+fun regset_or(dst: *RegSet, src: *RegSet) {
+    var i: u16 = 0;
+    for (i < dst.word_count) {
+        dst.bits[i] = dst.bits[i] | src.bits[i];
+        i = i + 1;
+    }
+}
+
+# compute live_in = use | (live_out & ~def) without bitwise NOT
+# uses identity: a & ~b = a ^ (a & b)
+fun regset_update_live_in(live_in: *RegSet, use_set: *RegSet,
+                          live_out: *RegSet, def_set: *RegSet) bool {
+    var changed: bool = false;
+    var i: u16 = 0;
+    for (i < live_in.word_count) {
+        val masked: u64 = live_out.bits[i] & def_set.bits[i];
+        val propagated: u64 = live_out.bits[i] ^ masked;
+        val new_val: u64 = use_set.bits[i] | propagated;
+        if (new_val != live_in.bits[i]) {
+            live_in.bits[i] = new_val;
+            changed = true;
+        }
+        i = i + 1;
+    }
+    ret changed;
+}
+
+fun find_max_reg(cfg: *CFG) u16 {
+    var max_reg: u16 = 0;
+    var bi: u16 = 0;
+    for (bi < cfg.block_count) {
+        val blk: *fn.Block = cfg.blocks[bi].block;
+        if (blk == nil) { bi = bi + 1; cnt; }
+        var ii: i32 = 0;
+        for (ii < blk.inst_count) {
+            val ins: *inst.Instruction = ?blk.insts[ii];
+            val o: u8 = ins.op;
+            # skip opcodes with no register operands
+            if (o != op.OP_JUMP && o != op.OP_LABEL && o != op.OP_FENCE &&
+                o != op.OP_TRAP && o != op.OP_HINT && o != op.OP_PARAM) {
+                if (ins.f0 > max_reg) { max_reg = ins.f0; }
+            }
+            # f1 is a register for memory, ALU, CONV, ARG, atomics, indirect CALL
+            if ((o >= op.OP_MOVE && o <= op.OP_CMP) || o == op.OP_CONV ||
+                o == op.OP_ARG || (o >= op.OP_ATOMIC_LOAD && o <= op.OP_ATOMIC_RMW)) {
+                if (ins.f1 > max_reg) { max_reg = ins.f1; }
+            }
+            if (o == op.OP_CALL && inst.flag(ins) == 1) {
+                if (ins.f1 > max_reg) { max_reg = ins.f1; }
+            }
+            # f2 is a register only for ALU/CMP (opcodes 4-13) when flag=0
+            if (o >= op.OP_ADD && o <= op.OP_CMP && inst.flag(ins) == 0) {
+                if (ins.f2 > max_reg) { max_reg = ins.f2; }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ret max_reg;
+}
+
+# classify instruction operands and update per-block def/use sets
+fun compute_block_def_use(blk: *fn.Block, def_set: *RegSet, use_set: *RegSet) {
+    if (blk == nil) { ret; }
+    var ii: i32 = 0;
+    for (ii < blk.inst_count) {
+        val ins: *inst.Instruction = ?blk.insts[ii];
+        val o: u8 = ins.op;
+
+        var r0: bool = false;
+        var r1: bool = false;
+        var r2: bool = false;
+        var w0: bool = false;
+
+        if (o >= op.OP_ADD && o <= op.OP_CMP) {
+            w0 = true; r1 = true;
+            if (inst.flag(ins) == 0) { r2 = true; }
+        }
+        if (o == op.OP_MOVE) {
+            w0 = true;
+            if (inst.cc(ins) == 0 && inst.flag(ins) == 0) { r1 = true; }
+        }
+        if (o == op.OP_LOAD || o == op.OP_ATOMIC_LOAD) { w0 = true; r1 = true; }
+        if (o == op.OP_STORE || o == op.OP_ATOMIC_STORE) { r0 = true; r1 = true; }
+        if (o == op.OP_ADDR) { w0 = true; r1 = true; }
+        if (o == op.OP_CONV) { w0 = true; r1 = true; }
+        if (o == op.OP_BRANCH) { r0 = true; }
+        if (o == op.OP_CALL) { w0 = true; if (inst.flag(ins) == 1) { r1 = true; } }
+        if (o == op.OP_RET && inst.size(ins) > 1) { r0 = true; }
+        if (o == op.OP_SYSCALL) { w0 = true; }
+        if (o == op.OP_ARG) { r1 = true; }
+        if (o == op.OP_ATOMIC_CAS || o == op.OP_ATOMIC_RMW) { w0 = true; r1 = true; }
+
+        # reads before writes: use if not already defined
+        if (r0 && regset_test(def_set, ins.f0) == false) { regset_set(use_set, ins.f0); }
+        if (r1 && regset_test(def_set, ins.f1) == false) { regset_set(use_set, ins.f1); }
+        if (r2 && regset_test(def_set, ins.f2) == false) { regset_set(use_set, ins.f2); }
+        if (w0) { regset_set(def_set, ins.f0); }
+
+        ii = ii + 1;
+    }
+}
+
+# compute_liveness: backward dataflow liveness analysis
+# ---
+# alloc: allocator for all liveness data structures
+# cfg:   pointer to CFG (must outlive LiveSets)
+# func:  pointer to function (reserved for future pool resolution)
+# ret:   per-block live-in and live-out register sets
+pub fun compute_liveness(alloc: *allocator.Allocator, cfg: *CFG,
+                         func: *fn.Function) LiveSets {
+    var ls: LiveSets;
+    ls.live_in = nil;
+    ls.live_out = nil;
+    ls.count = 0;
+
+    if (alloc == nil || cfg == nil || cfg.block_count == 0) { ret ls; }
+
+    val n: u16 = cfg.block_count;
+    val max_reg: u16 = find_max_reg(cfg);
+    val wc: u16 = (max_reg / 64) + 1;
+
+    val li_r: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](li_r)) { ret ls; }
+    ls.live_in = unwrap_ok[*RegSet, str](li_r);
+
+    val lo_r: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](lo_r)) { ret ls; }
+    ls.live_out = unwrap_ok[*RegSet, str](lo_r);
+    ls.count = n;
+
+    val dr: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](dr)) { ret ls; }
+    var def_sets: *RegSet = unwrap_ok[*RegSet, str](dr);
+
+    val ur: Result[*RegSet, str] =
+        allocator.reallocate[RegSet](alloc, nil, 0, n::usize);
+    if (is_err[*RegSet, str](ur)) { ret ls; }
+    var use_sets: *RegSet = unwrap_ok[*RegSet, str](ur);
+
+    var i: u16 = 0;
+    for (i < n) {
+        ls.live_in[i] = regset_alloc(alloc, wc);
+        ls.live_out[i] = regset_alloc(alloc, wc);
+        def_sets[i] = regset_alloc(alloc, wc);
+        use_sets[i] = regset_alloc(alloc, wc);
+        compute_block_def_use(cfg.blocks[i].block, ?def_sets[i], ?use_sets[i]);
+        i = i + 1;
+    }
+
+    var changed: bool = true;
+    for (changed) {
+        changed = false;
+        var ri: u16 = n;
+        for (ri > 0) {
+            ri = ri - 1;
+
+            var w: u16 = 0;
+            for (w < wc) { ls.live_out[ri].bits[w] = 0; w = w + 1; }
+
+            val bb: *BasicBlock = ?cfg.blocks[ri];
+            var si: u16 = 0;
+            for (si < bb.nsuccs) {
+                regset_or(?ls.live_out[ri], ?ls.live_in[bb.succs[si]]);
+                si = si + 1;
+            }
+
+            val c: bool = regset_update_live_in(
+                ?ls.live_in[ri], ?use_sets[ri], ?ls.live_out[ri], ?def_sets[ri]);
+            if (c) { changed = true; }
+        }
+    }
+
+    i = 0;
+    for (i < n) {
+        regset_free(alloc, ?def_sets[i]);
+        regset_free(alloc, ?use_sets[i]);
+        i = i + 1;
+    }
+    allocator.deallocate[RegSet](alloc, def_sets, n::usize);
+    allocator.deallocate[RegSet](alloc, use_sets, n::usize);
+
+    ret ls;
+}
+
+# is_live_in: test whether a register is live at the entry of a block
+# ---
+# sets:  pointer to LiveSets
+# block: block index
+# reg:   register ID
+# ret:   true if reg is in live_in[block]
+pub fun is_live_in(sets: *LiveSets, block: u16, reg: u16) bool {
+    if (sets == nil || sets.live_in == nil || block >= sets.count) { ret false; }
+    ret regset_test(?sets.live_in[block], reg);
+}
+
+# is_live_out: test whether a register is live at the exit of a block
+# ---
+# sets:  pointer to LiveSets
+# block: block index
+# reg:   register ID
+# ret:   true if reg is in live_out[block]
+pub fun is_live_out(sets: *LiveSets, block: u16, reg: u16) bool {
+    if (sets == nil || sets.live_out == nil || block >= sets.count) { ret false; }
+    ret regset_test(?sets.live_out[block], reg);
+}
+
+# live_dnit: free all memory owned by a LiveSets
+# ---
+# alloc: allocator used during compute_liveness
+# sets:  pointer to LiveSets
+pub fun live_dnit(alloc: *allocator.Allocator, sets: *LiveSets) {
+    if (alloc == nil || sets == nil) { ret; }
+    var i: u16 = 0;
+    for (i < sets.count) {
+        if (sets.live_in != nil) { regset_free(alloc, ?sets.live_in[i]); }
+        if (sets.live_out != nil) { regset_free(alloc, ?sets.live_out[i]); }
+        i = i + 1;
+    }
+    if (sets.live_in != nil) {
+        allocator.deallocate[RegSet](alloc, sets.live_in, sets.count::usize);
+        sets.live_in = nil;
+    }
+    if (sets.live_out != nil) {
+        allocator.deallocate[RegSet](alloc, sets.live_out, sets.count::usize);
+        sets.live_out = nil;
+    }
+    sets.count = 0;
+}
+
+fun alloc_block(alloc: *allocator.Allocator, label: str) *fn.Block {
+    val r: Result[*fn.Block, str] =
+        allocator.reallocate[fn.Block](alloc, nil, 0, 1);
+    if (is_err[*fn.Block, str](r)) { ret nil; }
+    var blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
+    @blk = fn.block_init(label);
+    ret blk;
+}
+
+test "cfg: empty function produces empty CFG" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "empty");
+    var cfg: CFG = build_cfg(?a, ?f);
+    fn.func_dnit(?a, ?f);
+    if (cfg.block_count != 0) { ret 1; }
+    if (cfg.blocks != nil) { ret 1; }
+    ret 0;
+}
+
+test "cfg: linear chain A->B->C" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "chain");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_jmp(lb::u16));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(lc::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_ret());
+    fn.func_add_block(?f, bc);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 3) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # A: 0 preds, 1 succ (B)
+    if (cfg.blocks[0].npreds != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].succs[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # B: 1 pred (A), 1 succ (C)
+    if (cfg.blocks[1].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[1].preds[0] != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[1].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[1].succs[0] != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # C: 1 pred (B), 0 succs
+    if (cfg.blocks[2].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[2].preds[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[2].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "cfg: diamond branch A->{B,C}->D" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "diamond");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+    val ld: i32 = pool.label_intern(?a, ?f.labels, "d");
+
+    # A: branch to B, fall through to C (block index 1=C because B is at index 2)
+    # actually let me order: A=0, B=1, C=2, D=3
+    # A branches to C (index 2), falls through to B (index 1)
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_branch(32, lc::u16, op.CC_NE));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bc);
+
+    var bd: *fn.Block = alloc_block(?a, "d");
+    fn.block_append(?a, bd, inst.make_ret());
+    fn.func_add_block(?f, bd);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 4) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # A: 0 preds, 2 succs (C=2, B=1 fallthrough)
+    if (cfg.blocks[0].npreds != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].nsuccs != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # D: 2 preds (B and C), 0 succs
+    if (cfg.blocks[3].npreds != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[3].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "cfg: self-loop" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "loop");
+
+    val la: i32 = pool.label_intern(?a, ?f.labels, "a");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_jmp(la::u16));
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].succs[0] != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].preds[0] != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "cfg: tail call has no successors" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "tail");
+
+    val lt: i32 = pool.label_intern(?a, ?f.labels, "target");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_call_direct(32, lt::u16, true, 8));
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "cfg: trap has no successors" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "trap");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_trap());
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_ret());
+    fn.func_add_block(?f, bb);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].nsuccs != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[1].npreds != 0) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "cfg: fallthrough on non-terminator" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "fall");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_alu(op.OP_ADD, 32, 33, 34, 8));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_ret());
+    fn.func_add_block(?f, bb);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+
+    if (cfg.block_count != 2) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].nsuccs != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[0].succs[0] != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (cfg.blocks[1].npreds != 1) { cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "dom: linear chain A dominates all" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "chain");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_jmp(lb::u16));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(lc::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_ret());
+    fn.func_add_block(?f, bc);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    if (dom.rpo_count != 3) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # A dominates all
+    if (dominates(?dom, 0, 0) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 1) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # B dominates C
+    if (dominates(?dom, 1, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # C does not dominate A or B
+    if (dominates(?dom, 2, 0)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # idom checks
+    if (dom.idom[0] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dom.idom[1] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dom.idom[2] != 1) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "dom: diamond idom converges to entry" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "diamond");
+
+    val lc: i32 = pool.label_intern(?a, ?f.labels, "c");
+    val ld: i32 = pool.label_intern(?a, ?f.labels, "d");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_branch(32, lc::u16, op.CC_NE));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bb);
+
+    var bc: *fn.Block = alloc_block(?a, "c");
+    fn.block_append(?a, bc, inst.make_jmp(ld::u16));
+    fn.func_add_block(?f, bc);
+
+    var bd: *fn.Block = alloc_block(?a, "d");
+    fn.block_append(?a, bd, inst.make_ret());
+    fn.func_add_block(?f, bd);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    # A dominates all
+    if (dominates(?dom, 0, 1) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 3) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # B and C don't dominate each other
+    if (dominates(?dom, 1, 2)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # D's idom is A (both paths merge)
+    if (dom.idom[3] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dom.idom[1] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dom.idom[2] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "dom: single block" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "single");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_ret());
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    if (dom.rpo_count != 1) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dom.idom[0] != 0) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 0) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "dom: loop header dominates body" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "loop");
+
+    val lh: i32 = pool.label_intern(?a, ?f.labels, "header");
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "body");
+    val le: i32 = pool.label_intern(?a, ?f.labels, "exit");
+
+    var be: *fn.Block = alloc_block(?a, "entry");
+    fn.block_append(?a, be, inst.make_jmp(lh::u16));
+    fn.func_add_block(?f, be);
+
+    var bh: *fn.Block = alloc_block(?a, "header");
+    fn.block_append(?a, bh, inst.make_branch(32, le::u16, op.CC_EQ));
+    fn.func_add_block(?f, bh);
+
+    var bb: *fn.Block = alloc_block(?a, "body");
+    fn.block_append(?a, bb, inst.make_jmp(lh::u16));
+    fn.func_add_block(?f, bb);
+
+    var bx: *fn.Block = alloc_block(?a, "exit");
+    fn.block_append(?a, bx, inst.make_ret());
+    fn.func_add_block(?f, bx);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var dom: DomInfo = compute_dominance(?a, ?cfg);
+
+    # entry dominates all
+    if (dominates(?dom, 0, 1) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 0, 3) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # header dominates body and exit
+    if (dominates(?dom, 1, 2) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (dominates(?dom, 1, 3) == false) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    # body does not dominate header (back edge)
+    if (dominates(?dom, 2, 1)) { dom_dnit(?a, ?dom); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    dom_dnit(?a, ?dom);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "live: register live across blocks" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "cross");
+
+    val lb: i32 = pool.label_intern(?a, ?f.labels, "b");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_alu(op.OP_ADD, 32, 33, 34, 8));
+    fn.block_append(?a, ba, inst.make_jmp(lb::u16));
+    fn.func_add_block(?f, ba);
+
+    var bb: *fn.Block = alloc_block(?a, "b");
+    fn.block_append(?a, bb, inst.make_alu(op.OP_ADD, 35, 32, 36, 8));
+    fn.block_append(?a, bb, inst.make_ret_value(35, 0, 8));
+    fn.func_add_block(?f, bb);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var ls: LiveSets = compute_liveness(?a, ?cfg, ?f);
+
+    # r32 live out of A, live in to B
+    if (is_live_out(?ls, 0, 32) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (is_live_in(?ls, 1, 32) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    # r32 not live out of B (consumed)
+    if (is_live_out(?ls, 1, 32)) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    # r33 live in to A (used, not defined before)
+    if (is_live_in(?ls, 0, 33) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    live_dnit(?a, ?ls);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}
+
+test "live: dead def not live" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var f: fn.Function = fn.func_init(?a, "dead");
+
+    var ba: *fn.Block = alloc_block(?a, "a");
+    fn.block_append(?a, ba, inst.make_alu(op.OP_ADD, 32, 33, 34, 8));
+    fn.block_append(?a, ba, inst.make_ret());
+    fn.func_add_block(?f, ba);
+
+    var cfg: CFG = build_cfg(?a, ?f);
+    var ls: LiveSets = compute_liveness(?a, ?cfg, ?f);
+
+    # r32 not live (dead def, never used)
+    if (is_live_out(?ls, 0, 32)) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (is_live_in(?ls, 0, 32)) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    # r33 and r34 are live_in (used as sources)
+    if (is_live_in(?ls, 0, 33) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+    if (is_live_in(?ls, 0, 34) == false) { live_dnit(?a, ?ls); cfg_dnit(?a, ?cfg); fn.func_dnit(?a, ?f); ret 1; }
+
+    live_dnit(?a, ?ls);
+    cfg_dnit(?a, ?cfg);
+    fn.func_dnit(?a, ?f);
+    ret 0;
+}

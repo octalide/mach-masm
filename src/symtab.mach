@@ -1,0 +1,181 @@
+# masm.symtab: symbol table for .mo serialization
+#
+# synthesizes a flat symbol table from a Module's functions and data
+# declarations. used by the binary encoder to write symbol entries
+# and by the decoder to reconstruct module-level symbol information.
+
+use std.types.size.usize;
+use std.types.result.is_err;
+use std.types.result.is_ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
+use std.types.string.str;
+
+use allocator: std.allocator;
+use vec:       std.collections.vector;
+use map:       std.collections.map;
+
+use sym:    masm.symbol;
+use fn:     masm.function;
+use data:   masm.data;
+use mod:    masm.module;
+use strtab: masm.strtab;
+
+# Entry: one symbol table entry
+#
+# flat record suitable for direct serialization. name is stored
+# as a byte offset into the accompanying string table.
+# ---
+# name_off: byte offset into the string table
+# section:  section kind (SEC_TEXT, SEC_DATA, etc.)
+# offset:   byte offset within section (0 for unresolved)
+# size:     size in bytes (0 for unresolved)
+# binding:  symbol binding (BIND_LOCAL, BIND_GLOBAL, BIND_WEAK)
+# kind:     symbol kind (SYM_FUNC, SYM_OBJECT, etc.)
+pub rec Entry {
+    name_off: u32;
+    section:  u16;
+    offset:   u32;
+    size:     u32;
+    binding:  u8;
+    kind:     u8;
+}
+
+# Table: growable array of symbol entries with name lookup
+# ---
+# entries:  backing vector of entries
+# name_map: hash map for name → entry index lookup
+pub rec Table {
+    entries:  vec.Vector[Entry];
+    name_map: map.Map[str, u16];
+}
+
+# tab_init: create an empty symbol table
+# ---
+# alloc: allocator for vector and map
+# ret:   initialized empty table
+pub fun tab_init(alloc: *allocator.Allocator) Table {
+    var t: Table;
+    t.entries = vec.init[Entry](alloc);
+    t.name_map = map.init[str, u16](alloc, map.hash_str, map.eq_str);
+    ret t;
+}
+
+# tab_dnit: free all memory owned by a symbol table
+# ---
+# t: pointer to table
+pub fun tab_dnit(t: *Table) {
+    if (t == nil) { ret; }
+    vec.dnit[Entry](?t.entries);
+    map.dnit[str, u16](?t.name_map);
+}
+
+# tab_add: append a symbol entry to the table
+# ---
+# t:        pointer to table
+# name:     symbol name (for lookup map)
+# name_off: byte offset into string table
+# binding:  symbol binding
+# kind:     symbol kind
+# section:  section kind
+# offset:   byte offset within section
+# size:     size in bytes
+# ret:      entry index (u16), or 0xFFFF on failure
+pub fun tab_add(t: *Table, name: str, name_off: u32, binding: u8,
+                kind: u8, section: u16, offset: u32, size: u32) u16 {
+    if (t == nil) { ret 0xFFFF; }
+
+    var e: Entry;
+    e.name_off = name_off;
+    e.section = section;
+    e.offset = offset;
+    e.size = size;
+    e.binding = binding;
+    e.kind = kind;
+
+    val r: Result[usize, str] = vec.push[Entry](?t.entries, e);
+    if (is_err[usize, str](r)) { ret 0xFFFF; }
+    val idx: u16 = (unwrap_ok[usize, str](r) - 1)::u16;
+
+    if (name != nil) {
+        map.insert[str, u16](?t.name_map, name, idx);
+    }
+
+    ret idx;
+}
+
+# tab_find: look up a symbol entry index by name
+# ---
+# t:    pointer to table
+# name: symbol name
+# ret:  entry index (u16), or 0xFFFF if not found
+pub fun tab_find(t: *Table, name: str) u16 {
+    if (t == nil || name == nil) { ret 0xFFFF; }
+    val r: Result[*u16, str] = map.get[str, u16](?t.name_map, ?name);
+    if (is_err[*u16, str](r)) { ret 0xFFFF; }
+    ret @unwrap_ok[*u16, str](r);
+}
+
+# tab_count: number of entries in the table
+# ---
+# t:   pointer to table
+# ret: entry count
+pub fun tab_count(t: *Table) u16 {
+    if (t == nil) { ret 0; }
+    ret t.entries.len::u16;
+}
+
+# tab_get: retrieve an entry by index
+# ---
+# t:   pointer to table
+# idx: entry index
+# ret: pointer to entry, or nil if out of bounds
+pub fun tab_get(t: *Table, idx: u16) *Entry {
+    if (t == nil) { ret nil; }
+    val r: Result[*Entry, str] = vec.get[Entry](?t.entries, idx::usize);
+    if (is_err[*Entry, str](r)) { ret nil; }
+    ret unwrap_ok[*Entry, str](r);
+}
+
+# build_from_module: synthesize a symbol table from a Module
+#
+# walks the module's functions and data declarations, interns their
+# names into the string table, and builds the symbol table entries.
+# ---
+# alloc: allocator for the table
+# stb:   pointer to string table builder (names are interned here)
+# m:     pointer to module
+# ret:   populated symbol table
+pub fun build_from_module(alloc: *allocator.Allocator, stb: *strtab.Builder,
+                          m: *mod.Module) Table {
+    var t: Table = tab_init(alloc);
+
+    if (m == nil) { ret t; }
+
+    var fi: usize = 0;
+    for (fi < m.functions.len) {
+        val f: *fn.Function = m.functions.data[fi];
+        if (f != nil) {
+            val name_off: u32 = strtab.stb_intern(stb, f.name);
+            tab_add(?t, f.name, name_off, sym.BIND_GLOBAL, sym.SYM_FUNC,
+                    sym.SEC_TEXT::u16, 0, 0);
+        }
+        fi = fi + 1;
+    }
+
+    var di: usize = 0;
+    for (di < m.data_decls.decls.len) {
+        val r: Result[*data.DataDecl, str] = vec.get[data.DataDecl](?m.data_decls.decls, di);
+        if (is_ok[*data.DataDecl, str](r)) {
+            val d: *data.DataDecl = unwrap_ok[*data.DataDecl, str](r);
+            if (d.sym_type != sym.SYM_FUNC) {
+                val name_off: u32 = strtab.stb_intern(stb, d.name);
+                tab_add(?t, d.name, name_off, d.binding, d.sym_type,
+                        d.section::u16, 0, d.data_len);
+            }
+        }
+        di = di + 1;
+    }
+
+    ret t;
+}

@@ -1,0 +1,262 @@
+# masm.data: module-level data declarations
+#
+# represents constant data, global variables, and BSS reservations at the
+# module level. lowering produces DataDecl records instead of writing raw
+# bytes to sections directly. a separate emission pass materializes them
+# into object sections, creating symbols and relocations as needed.
+
+use std.types.size.usize;
+use std.types.result.is_err;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
+use std.types.string.str;
+
+use allocator: std.allocator;
+use vec:       std.collections.vector;
+use sym:       masm.symbol;
+
+pub def DataKind: u8;
+
+pub val DATA_BYTES: DataKind = 0;
+pub val DATA_ZERO:  DataKind = 1;
+
+# DeclReloc: a relocation entry within a data declaration's buffer
+#
+# used when a data declaration contains a pointer to another symbol
+# (e.g. a global string variable in .data pointing to its bytes in
+# .rodata).
+# ---
+# offset: byte offset within the owning decl's data
+# target: target symbol name
+# kind:   relocation kind
+# addend: additive displacement
+pub rec DeclReloc {
+    offset: u32;
+    target: str;
+    kind:   sym.RelocKind;
+    addend: i64;
+}
+
+# DataDecl: a named piece of data to be materialized into a section
+#
+# represents a single data item produced by lowering. DATA_BYTES
+# declarations carry raw byte content; DATA_ZERO declarations
+# reserve uninitialized space (BSS).
+# ---
+# name:        symbol name
+# section:     target section (rodata, data, bss)
+# binding:     symbol visibility (local, global, weak)
+# sym_type:    symbol kind (object, func)
+# kind:        bytes or zero-fill
+# align:       alignment requirement in bytes
+# data:        raw byte content (DATA_BYTES only)
+# data_len:    byte count, or reservation size for DATA_ZERO
+# relocs:      relocations within this declaration
+# reloc_count: number of relocations
+# reloc_cap:   allocated relocation capacity
+# src_file:    source file path for debug info
+# src_line:    source line number for debug info
+pub rec DataDecl {
+    name:        str;
+    section:     sym.SectionKind;
+    binding:     sym.SymBinding;
+    sym_type:    sym.SymKind;
+    kind:        DataKind;
+    align:       u8;
+    data:        *u8;
+    data_len:    u32;
+    relocs:      *DeclReloc;
+    reloc_count: i32;
+    reloc_cap:   i32;
+    src_file:    str;
+    src_line:    i32;
+}
+
+val INITIAL_RELOC_CAP: i32 = 4;
+
+# DataDeclList: growable array of data declarations
+# ---
+# decls: backing vector
+pub rec DataDeclList {
+    decls: vec.Vector[DataDecl];
+}
+
+# list_init: create an empty data declaration list
+# ---
+# alloc: allocator for vector storage
+# ret:   empty list
+pub fun list_init(alloc: *allocator.Allocator) DataDeclList {
+    var l: DataDeclList;
+    l.decls = vec.init[DataDecl](alloc);
+    ret l;
+}
+
+# list_add: append a declaration to the list
+# ---
+# l:    pointer to list
+# decl: declaration to append
+# ret:  index of the appended declaration, or -1 on failure
+pub fun list_add(l: *DataDeclList, decl: DataDecl) i32 {
+    if (l == nil) { ret -1; }
+    val r: Result[usize, str] = vec.push[DataDecl](?l.decls, decl);
+    if (is_err[usize, str](r)) { ret -1; }
+    ret (unwrap_ok[usize, str](r) - 1)::i32;
+}
+
+# list_get: retrieve a declaration by index
+# ---
+# l:     pointer to list
+# index: declaration index
+# ret:   pointer to the declaration, or nil if out of bounds
+pub fun list_get(l: *DataDeclList, index: i32) *DataDecl {
+    if (l == nil || index < 0) { ret nil; }
+    val r: Result[*DataDecl, str] = vec.get[DataDecl](?l.decls, index::usize);
+    if (is_err[*DataDecl, str](r)) { ret nil; }
+    ret unwrap_ok[*DataDecl, str](r);
+}
+
+# list_dnit: free a list and all owned memory
+#
+# frees per-declaration relocation arrays and data buffers, then the
+# backing vector.
+# ---
+# alloc: allocator used for per-declaration allocations
+# l:     pointer to list
+pub fun list_dnit(alloc: *allocator.Allocator, l: *DataDeclList) {
+    if (alloc == nil || l == nil) { ret; }
+
+    var i: usize = 0;
+    for (i < l.decls.len) {
+        if (l.decls.data[i].relocs != nil) {
+            allocator.deallocate[DeclReloc](alloc, l.decls.data[i].relocs, l.decls.data[i].reloc_cap::usize);
+        }
+        if (l.decls.data[i].data != nil) {
+            allocator.deallocate[u8](alloc, l.decls.data[i].data, l.decls.data[i].data_len::usize);
+        }
+        i = i + 1;
+    }
+
+    vec.dnit[DataDecl](?l.decls);
+}
+
+# make_bytes: create a DATA_BYTES declaration
+#
+# the data pointer and length must already be populated. the caller
+# retains no ownership of the data buffer after adding to a list.
+# ---
+# name:    symbol name
+# sec:     target section kind
+# binding: symbol visibility
+# data:    raw byte content
+# len:     byte count
+# align:   alignment requirement
+# ret:     initialized declaration
+pub fun make_bytes(name: str, sec: sym.SectionKind, binding: sym.SymBinding,
+                   data: *u8, len: u32, align: u8) DataDecl {
+    var d: DataDecl;
+    d.name = name;
+    d.section = sec;
+    d.binding = binding;
+    d.sym_type = sym.SYM_OBJECT;
+    d.kind = DATA_BYTES;
+    d.align = align;
+    d.data = data;
+    d.data_len = len;
+    d.relocs = nil;
+    d.reloc_count = 0;
+    d.reloc_cap = 0;
+    d.src_file = nil;
+    d.src_line = 0;
+    ret d;
+}
+
+# make_zero: create a DATA_ZERO (BSS) declaration
+#
+# reserves uninitialized space of the given size. no data buffer is
+# allocated; data_len holds the reservation size.
+# ---
+# name:    symbol name
+# size:    reservation size in bytes
+# binding: symbol visibility
+# align:   alignment requirement
+# ret:     initialized declaration
+pub fun make_zero(name: str, size: u32, binding: sym.SymBinding, align: u8) DataDecl {
+    var d: DataDecl;
+    d.name = name;
+    d.section = sym.SEC_BSS;
+    d.binding = binding;
+    d.sym_type = sym.SYM_OBJECT;
+    d.kind = DATA_ZERO;
+    d.align = align;
+    d.data = nil;
+    d.data_len = size;
+    d.relocs = nil;
+    d.reloc_count = 0;
+    d.reloc_cap = 0;
+    d.src_file = nil;
+    d.src_line = 0;
+    ret d;
+}
+
+# make_func: create a function symbol declaration
+#
+# registers a function symbol with no associated data. used to declare
+# function symbols for the linker.
+# ---
+# name:    function symbol name
+# binding: symbol visibility
+# ret:     initialized declaration
+pub fun make_func(name: str, binding: sym.SymBinding) DataDecl {
+    var d: DataDecl;
+    d.name = name;
+    d.section = sym.SEC_TEXT;
+    d.binding = binding;
+    d.sym_type = sym.SYM_FUNC;
+    d.kind = DATA_ZERO;
+    d.align = 1;
+    d.data = nil;
+    d.data_len = 0;
+    d.relocs = nil;
+    d.reloc_count = 0;
+    d.reloc_cap = 0;
+    d.src_file = nil;
+    d.src_line = 0;
+    ret d;
+}
+
+# add_reloc: append a relocation to a declaration
+#
+# grows the relocation array geometrically when full.
+# ---
+# alloc:  allocator for array growth
+# d:      pointer to declaration
+# offset: byte offset within the declaration's data
+# target: target symbol name
+# kind:   relocation kind
+# addend: additive displacement
+# ret:    index of the appended relocation, or -1 on failure
+pub fun add_reloc(alloc: *allocator.Allocator, d: *DataDecl,
+                  offset: u32, target: str, kind: sym.RelocKind,
+                  addend: i64) i32 {
+    if (alloc == nil || d == nil) { ret -1; }
+
+    if (d.reloc_count >= d.reloc_cap) {
+        var new_cap: i32 = INITIAL_RELOC_CAP;
+        if (d.reloc_cap > 0) { new_cap = d.reloc_cap * 2; }
+
+        val r: Result[*DeclReloc, str] =
+            allocator.reallocate[DeclReloc](alloc, d.relocs, d.reloc_cap::usize, new_cap::usize);
+        if (is_err[*DeclReloc, str](r)) { ret -1; }
+
+        d.relocs = unwrap_ok[*DeclReloc, str](r);
+        d.reloc_cap = new_cap;
+    }
+
+    val idx: i32 = d.reloc_count;
+    d.relocs[idx].offset = offset;
+    d.relocs[idx].target = target;
+    d.relocs[idx].kind = kind;
+    d.relocs[idx].addend = addend;
+    d.reloc_count = d.reloc_count + 1;
+    ret idx;
+}

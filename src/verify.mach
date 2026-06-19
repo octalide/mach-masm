@@ -1,0 +1,429 @@
+# masm.verify: IR validation pass
+#
+# checks that a Function or Module contains well-formed IR: opcodes in
+# range, meta fields valid, pool indices in bounds, blocks properly
+# terminated, and per-opcode field constraints met. returns err with a
+# descriptive message on the first violation found.
+
+use std.types.bool.bool;
+use std.types.bool.true;
+use std.types.bool.false;
+use std.types.size.usize;
+use std.types.string.str;
+use std.types.result.err;
+use std.types.result.is_err;
+use std.types.result.is_ok;
+use std.types.result.ok;
+use std.types.result.Result;
+use std.types.result.unwrap_ok;
+
+use allocator: std.allocator;
+use page:      std.allocator.page;
+use vec:       std.collections.vector;
+
+use op:       masm.op;
+use inst:     masm.inst;
+use pool:     masm.pool;
+use fn:       masm.function;
+use mod:      masm.module;
+use typedesc: masm.typedesc;
+
+# verify_module: validate every function in a module
+# ---
+# m:   pointer to module
+# ret: ok(true) if valid, or err with description of first violation
+pub fun verify_module(m: *mod.Module) Result[bool, str] {
+    if (m == nil) { ret err[bool, str]("nil module"); }
+
+    var i: usize = 0;
+    for (i < m.functions.len) {
+        val func: *fn.Function = m.functions.data[i];
+        if (func != nil) {
+            val r: Result[bool, str] = verify_function(func);
+            if (is_err[bool, str](r)) { ret r; }
+        }
+        i = i + 1;
+    }
+    ret ok[bool, str](true);
+}
+
+pub fun verify_function(func: *fn.Function) Result[bool, str] {
+    if (func == nil) { ret err[bool, str]("nil function"); }
+
+    if (func.blocks.len == 0) {
+        ret err[bool, str]("function has no blocks");
+    }
+
+    val lbl_count: i32  = pool.label_count(?func.labels);
+    val con_count: i32  = pool.const_count(?func.const_pool);
+    val data_len:  i32  = pool.data_length(?func.data_pool);
+    val td_count:  i32  = typedesc.count(?func.type_descs);
+
+    var bi: usize = 0;
+    for (bi < func.blocks.len) {
+        val blk: *fn.Block = func.blocks.data[bi];
+        if (blk == nil) {
+            ret err[bool, str]("nil block pointer");
+        }
+        if (blk.inst_count <= 0) {
+            ret err[bool, str]("empty block");
+        }
+
+        var ii: i32 = 0;
+        for (ii < blk.inst_count) {
+            val i: *inst.Instruction = ?blk.insts[ii];
+            val r: Result[bool, str] = verify_inst(i, ii, lbl_count, con_count, data_len, td_count);
+            if (is_err[bool, str](r)) { ret r; }
+
+            if (ii < blk.inst_count - 1) {
+                if (is_terminator(i.op, inst.cc(i), inst.flag(i)) && i.op != op.OP_ISA_ASM) {
+                    ret err[bool, str]("terminator before end of block");
+                }
+            }
+
+            if (i.op == op.OP_LABEL && ii > 0) {
+                ret err[bool, str]("label not at start of block");
+            }
+
+            ii = ii + 1;
+        }
+
+        val last: *inst.Instruction = ?blk.insts[blk.inst_count - 1];
+        if (!is_terminator(last.op, inst.cc(last), inst.flag(last))) {
+            ret err[bool, str]("block does not end with terminator");
+        }
+
+        bi = bi + 1;
+    }
+
+    ret ok[bool, str](true);
+}
+
+fun is_terminator(o: u8, cc: u8, flag: u8) bool {
+    if (o == op.OP_JUMP)  { ret true; }
+    if (o == op.OP_RET)  { ret true; }
+    if (o == op.OP_TRAP) { ret true; }
+    if (o == op.OP_BRANCH) { ret true; }
+    if (o == op.OP_ISA_ASM) { ret true; }
+    if (o == op.OP_CALL && cc == op.CALL_TAIL && flag == 0) { ret true; }
+    if (o == op.OP_CALL && cc == op.CALL_TAIL && flag == 1) { ret true; }
+    ret false;
+}
+
+fun verify_inst(i: *inst.Instruction, idx: i32,
+                lbl_count: i32, con_count: i32,
+                data_len: i32, td_count: i32) Result[bool, str] {
+    val o:    u8 = i.op;
+    val cc:   u8 = inst.cc(i);
+    val sz:   u8 = inst.size(i);
+    val flag: u8 = inst.flag(i);
+
+    if (o >= op.OP_COUNT) {
+        ret err[bool, str]("opcode out of range");
+    }
+
+    if (!op.is_valid_cc(o, cc)) {
+        ret err[bool, str]("invalid cc for opcode");
+    }
+
+    if (flag > 1) {
+        ret err[bool, str]("flag must be 0 or 1");
+    }
+
+    if (o == op.OP_MOVE) { ret verify_mov(i, cc, flag, data_len, con_count); }
+    if (o == op.OP_LOAD || o == op.OP_STORE) { ret verify_load_store(i, flag, data_len); }
+    if (o == op.OP_ADDR) { ret verify_addr(i, cc, flag, data_len, lbl_count); }
+
+    if (o == op.OP_ADD || o == op.OP_SUB || o == op.OP_MUL ||
+        o == op.OP_AND || o == op.OP_OR  || o == op.OP_XOR || o == op.OP_SHL) {
+        ret verify_alu(i, flag, con_count);
+    }
+    if (o == op.OP_DIV) { ret verify_alu(i, flag, con_count); }
+    if (o == op.OP_SHR) { ret verify_alu(i, flag, con_count); }
+    if (o == op.OP_CMP) { ret verify_alu(i, flag, con_count); }
+    if (o == op.OP_CONV) { ret ok[bool, str](true); }
+
+    if (o == op.OP_JUMP) { ret verify_jmp(i, lbl_count); }
+    if (o == op.OP_BRANCH) { ret verify_branch(i, lbl_count); }
+    if (o == op.OP_CALL) { ret verify_call(i, flag, lbl_count); }
+    if (o == op.OP_RET) { ret verify_ret(i, sz, td_count); }
+
+    if (o == op.OP_LABEL) { ret verify_label(i, lbl_count); }
+    if (o == op.OP_SYSCALL) { ret verify_syscall(i); }
+
+    if (o == op.OP_ARG) { ret verify_arg(i, flag, td_count); }
+    if (o == op.OP_PARAM) { ret verify_param(i, td_count); }
+
+    if (o == op.OP_ATOMIC_LOAD)  { ret verify_pool_f2(i, data_len, "atomic.load"); }
+    if (o == op.OP_ATOMIC_STORE) { ret verify_pool_f2(i, data_len, "atomic.store"); }
+    if (o == op.OP_ATOMIC_CAS)   { ret verify_pool_f2(i, data_len, "atomic.cas"); }
+    if (o == op.OP_ATOMIC_RMW)   { ret verify_pool_f2(i, data_len, "atomic.rmw"); }
+
+    if (o == op.OP_FENCE) { ret verify_fence(i); }
+    if (o == op.OP_TRAP) { ret verify_trap(i); }
+    if (o == op.OP_HINT) { ret verify_hint(i); }
+
+    ret ok[bool, str](true);
+}
+
+fun verify_mov(i: *inst.Instruction, cc: u8, flag: u8,
+               data_len: i32, con_count: i32) Result[bool, str] {
+    if (cc == 1 && flag == 0) {
+        if (i.f2::i32 >= data_len && data_len > 0) {
+            ret err[bool, str]("mov.imm32 f2 exceeds data pool");
+        }
+        ret ok[bool, str](true);
+    }
+    if (cc == 0 && flag == 1) {
+        if (i.f2::i32 >= con_count && con_count > 0) {
+            ret err[bool, str]("mov.imm64 f2 exceeds const pool");
+        }
+        ret ok[bool, str](true);
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_load_store(i: *inst.Instruction, flag: u8,
+                      data_len: i32) Result[bool, str] {
+    if (data_len > 0 && i.f2::i32 >= data_len) {
+        ret err[bool, str]("load/store f2 exceeds data pool");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_addr(i: *inst.Instruction, cc: u8, flag: u8,
+                data_len: i32, lbl_count: i32) Result[bool, str] {
+    if (cc == 1 && flag == 0) {
+        if (i.f2::i32 >= lbl_count) {
+            ret err[bool, str]("addr.label f2 exceeds label table");
+        }
+        ret ok[bool, str](true);
+    }
+    if (data_len > 0 && i.f2::i32 >= data_len) {
+        ret err[bool, str]("addr f2 exceeds data pool");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_alu(i: *inst.Instruction, flag: u8,
+               con_count: i32) Result[bool, str] {
+    if (flag == 1) {
+        if (con_count > 0 && i.f2::i32 >= con_count) {
+            ret err[bool, str]("alu immediate f2 exceeds const pool");
+        }
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_jmp(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
+    if (i.f0 != 0 || i.f1 != 0) {
+        ret err[bool, str]("jmp f0/f1 must be zero");
+    }
+    if (i.f2::i32 >= lbl_count) {
+        ret err[bool, str]("jmp f2 exceeds label table");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_branch(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
+    if (i.f2::i32 >= lbl_count) {
+        ret err[bool, str]("branch f2 exceeds label table");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_call(i: *inst.Instruction, flag: u8,
+                lbl_count: i32) Result[bool, str] {
+    if (flag == 0) {
+        if (i.f2::i32 >= lbl_count) {
+            ret err[bool, str]("call.direct f2 exceeds label table");
+        }
+    }
+    if (flag == 1) {
+        if (i.f2 != 0) {
+            ret err[bool, str]("call.indirect f2 must be zero");
+        }
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_ret(i: *inst.Instruction, sz: u8, td_count: i32) Result[bool, str] {
+    if (sz <= 1 && i.f0 == 0 && i.f1 == 0 && i.f2 == 0) {
+        ret ok[bool, str](true);
+    }
+    if (i.f2 != 0xFFFF && td_count > 0 && i.f2::i32 >= td_count) {
+        ret err[bool, str]("ret.value f2 exceeds type descriptor table");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_label(i: *inst.Instruction, lbl_count: i32) Result[bool, str] {
+    if (i.f0 != 0 || i.f1 != 0) {
+        ret err[bool, str]("label f0/f1 must be zero");
+    }
+    if (i.f2::i32 >= lbl_count) {
+        ret err[bool, str]("label f2 exceeds label table");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_syscall(i: *inst.Instruction) Result[bool, str] {
+    if (i.f1 != 0 || i.f2 != 0) {
+        ret err[bool, str]("syscall f1/f2 must be zero");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_arg(i: *inst.Instruction, flag: u8, td_count: i32) Result[bool, str] {
+    if (flag == 0) {
+        if (i.f2 != 0xFFFF && td_count > 0 && i.f2::i32 >= td_count) {
+            ret err[bool, str]("arg f2 exceeds type descriptor table");
+        }
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_param(i: *inst.Instruction, td_count: i32) Result[bool, str] {
+    if (i.f2 != 0xFFFF && td_count > 0 && i.f2::i32 >= td_count) {
+        ret err[bool, str]("param f2 exceeds type descriptor table");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_pool_f2(i: *inst.Instruction, data_len: i32, name: str) Result[bool, str] {
+    if (data_len > 0 && i.f2::i32 >= data_len) {
+        ret err[bool, str]("f2 exceeds data pool");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_fence(i: *inst.Instruction) Result[bool, str] {
+    if (i.f0 != 0 || i.f1 != 0 || i.f2 != 0) {
+        ret err[bool, str]("fence fields must be zero");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_trap(i: *inst.Instruction) Result[bool, str] {
+    if (i.f0 != 0 || i.f1 != 0 || i.f2 != 0 || i.meta != 0) {
+        ret err[bool, str]("trap fields and meta must be zero");
+    }
+    ret ok[bool, str](true);
+}
+
+fun verify_hint(i: *inst.Instruction) Result[bool, str] {
+    if (i.f0 != 0 || i.f1 != 0 || i.f2 != 0) {
+        ret err[bool, str]("hint fields must be zero");
+    }
+    ret ok[bool, str](true);
+}
+
+test "verify: valid function passes" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var func: fn.Function = fn.func_init(?a, "test");
+
+    val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
+    if (is_err[*fn.Block, str](r)) { ret 1; }
+    val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
+    @blk = fn.block_init(".entry");
+
+    fn.block_append(?a, blk, inst.make_label(lbl::u16));
+    fn.block_append(?a, blk, inst.make_ret());
+    fn.func_add_block(?func, blk);
+
+    val vr: Result[bool, str] = verify_function(?func);
+    fn.func_dnit(?a, ?func);
+    if (is_ok[bool, str](vr)) { ret 0; }
+    ret 1;
+}
+
+test "verify: empty function fails" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var func: fn.Function = fn.func_init(?a, "empty");
+    val vr: Result[bool, str] = verify_function(?func);
+    fn.func_dnit(?a, ?func);
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
+}
+
+test "verify: missing terminator fails" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var func: fn.Function = fn.func_init(?a, "noterm");
+
+    val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
+    if (is_err[*fn.Block, str](r)) { ret 1; }
+    val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
+    @blk = fn.block_init(".entry");
+
+    fn.block_append(?a, blk, inst.make_alu(op.OP_ADD, 1, 2, 3, 8));
+    fn.func_add_block(?func, blk);
+
+    val vr: Result[bool, str] = verify_function(?func);
+    fn.func_dnit(?a, ?func);
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
+}
+
+test "verify: bad label index fails" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var func: fn.Function = fn.func_init(?a, "badlbl");
+
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
+    if (is_err[*fn.Block, str](r)) { ret 1; }
+    val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
+    @blk = fn.block_init(".entry");
+
+    fn.block_append(?a, blk, inst.make_jmp(999));
+    fn.func_add_block(?func, blk);
+
+    val vr: Result[bool, str] = verify_function(?func);
+    fn.func_dnit(?a, ?func);
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
+}
+
+test "verify: trap instruction passes" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var func: fn.Function = fn.func_init(?a, "trap");
+
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
+    if (is_err[*fn.Block, str](r)) { ret 1; }
+    val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
+    @blk = fn.block_init(".entry");
+
+    fn.block_append(?a, blk, inst.make_trap());
+    fn.func_add_block(?func, blk);
+
+    val vr: Result[bool, str] = verify_function(?func);
+    fn.func_dnit(?a, ?func);
+    if (is_ok[bool, str](vr)) { ret 0; }
+    ret 1;
+}
+
+test "verify: terminator mid-block fails" {
+    var a: allocator.Allocator;
+    page.make(?a);
+    var func: fn.Function = fn.func_init(?a, "midterm");
+
+    val lbl: i32 = pool.label_intern(?a, ?func.labels, ".entry");
+    val r: Result[*fn.Block, str] = allocator.allocate[fn.Block](?a, 1);
+    if (is_err[*fn.Block, str](r)) { ret 1; }
+    val blk: *fn.Block = unwrap_ok[*fn.Block, str](r);
+    @blk = fn.block_init(".entry");
+
+    fn.block_append(?a, blk, inst.make_ret());
+    fn.block_append(?a, blk, inst.make_alu(op.OP_ADD, 1, 2, 3, 8));
+    fn.func_add_block(?func, blk);
+
+    val vr: Result[bool, str] = verify_function(?func);
+    fn.func_dnit(?a, ?func);
+    if (is_err[bool, str](vr)) { ret 0; }
+    ret 1;
+}
