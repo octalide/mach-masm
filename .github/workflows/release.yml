@@ -18,7 +18,7 @@ jobs:
 
       - name: Install mach
         run: |
-          curl -fsSL "https://github.com/octalide/mach/releases/latest/download/mach" -o /usr/local/bin/mach
+          curl -fsSL "https://github.com/briar-systems/mach/releases/latest/download/mach" -o /usr/local/bin/mach
           chmod +x /usr/local/bin/mach
 
       - name: Build
